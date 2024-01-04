@@ -23,7 +23,7 @@ chezmoi managed --include=files --exclude=externals >"$tmpdir/files"
 if [ -n "$query" ] && grep -Fqx "$query" "$tmpdir/files"; then
     # Exact match
     printf '%s\n' "$query"
-else
+elif [ -t 1 ]; then
     # Fuzzy match
     _fzf "$query" <"$tmpdir/files"
 fi >"$tmpdir/selected"
