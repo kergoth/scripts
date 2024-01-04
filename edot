@@ -30,7 +30,6 @@ if [ -n "$query" ] && grep -Fqx "$query" "$tmpdir/files"; then
     # Exact match
     printf '%s\n' "$query"
 elif [ $interactive -eq 1 ]; then
-    echo >&2 fuzzy
     # Fuzzy match
     _fzf "$query" <"$tmpdir/files"
 fi >"$tmpdir/selected"
