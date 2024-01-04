@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# A wrapper around chezmoi edit --watch --apply that allows fuzzy matching of
+# files in the chezmoi source directory.
+
+set -euo pipefail
+
+_fzf() {
+    local query=$1
+    shift
+    if command -v bat &>/dev/null; then
+        # shellcheck disable=SC2016
+        set -- "$@" --preview-window=right:70%:wrap --preview 'bat --color=always --style=header,grid --line-range :500 "$HOME/"{}'
+    fi
+    # shellcheck disable=SC2086
+    fzf-tmux --select-1 --exit-0 ${FZF_DEFAULT_OPTS:---multi} ${query:+--query="$query"} "$@"
+}
+
+query=${1#"$HOME/"}
+tmpdir=$(mktemp -d -t chezmoi-fzf.XXXXXX)
+trap 'rm -rf "$tmpdir"' EXIT INT TERM
+
+chezmoi managed --include=files >"$tmpdir/files"
+if [ -n "$query" ] && grep -Fqx "$query" "$tmpdir/files"; then
+    # Exact match
+    printf '%s\n' "$query"
+else
+    # Fuzzy match
+    _fzf "$query" <"$tmpdir/files"
+fi >"$tmpdir/selected"
+
+if ! [ -s "$tmpdir/selected" ]; then
+    if [ -n "$query" ] && [ -f "$HOME/$query" ]; then
+        # Likely unmanaged
+        echo >&2 "Adding $HOME/$query"
+        chezmoi add "$HOME/$query"
+        printf '%s\n' "$query" >"$tmpdir/selected"
+    else
+        echo >&2 "No file selected"
+        exit 1
+    fi
+fi
+
+if [ -s "$tmpdir/selected" ]; then
+    cat "$tmpdir/selected" |
+        sed 's#^#'"$HOME"'/#' |
+        tr '\n' '\0' |
+        xargs -0 chezmoi edit --watch --apply
+fi
