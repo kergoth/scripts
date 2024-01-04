@@ -19,7 +19,7 @@ query=${1#"$HOME/"}
 tmpdir=$(mktemp -d -t chezmoi-fzf.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
-chezmoi managed --include=files >"$tmpdir/files"
+chezmoi managed --include=files --exclude=externals >"$tmpdir/files"
 if [ -n "$query" ] && grep -Fqx "$query" "$tmpdir/files"; then
     # Exact match
     printf '%s\n' "$query"
