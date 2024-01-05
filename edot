@@ -25,7 +25,8 @@ else
     interactive=0
 fi
 
-chezmoi managed --include=files,scripts --exclude=externals >"$tmpdir/files"
+chezmoi managed --include=files,scripts --exclude=externals \
+    | grep -Ev '\.(ttf|otf)$' >"$tmpdir/files"
 if [ -n "$query" ] && grep -Fqx "$query" "$tmpdir/files"; then
     # Exact match
     printf '%s\n' "$query"
