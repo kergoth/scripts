@@ -15,7 +15,8 @@ _fzf() {
     fzf-tmux --select-1 --exit-0 ${FZF_DEFAULT_OPTS:---multi} ${query:+--query="$query"} "$@"
 }
 
-query=${1#"$HOME/"}
+query=${*:-}
+query=${query#"$HOME/"}
 tmpdir=$(mktemp -d -t chezmoi-fzf.XXXXXX)
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
