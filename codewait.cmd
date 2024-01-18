@@ -1,0 +1,1 @@
+@code --new-window --wait %*
