@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+    echo >&2 "${0##*/} [-r] [--] [FIND_ARGS..]"
+    exit 2
+}
+
+reverse=
+date_fmt="%Y-%m-%d %H:%M"
+birth_date=0
+while getopts rf:bh opt; do
+    case "$opt" in
+    r)
+        reverse=1
+        ;;
+    f)
+        date_fmt="$OPTARG"
+        ;;
+    b)
+        birth_date=1
+        ;;
+    \? | h)
+        usage
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+case "${OSTYPE:-}" in
+darwin*)
+    MACOS=1
+    ;;
+*)
+    MACOS=0
+    if [ $birth_date -eq 1 ]; then
+        echo >&2 "Error: -b is not supported for non-macOS systems"
+        exit 1
+    fi
+    ;;
+esac
+
+if [ $# -eq 0 ]; then
+    set -- .
+fi
+set -- "$@" \( -not -name .DS_Store -a -not -name .\* -a -not -wholename \*/.\* \) -a
+
+if [ $MACOS -eq 1 ]; then
+    if [ $birth_date -eq 1 ]; then
+        statfmt="%b%t%N"
+    else
+        statfmt="%m%t%N"
+    fi
+
+    find "$@" -type f -exec stat -f "$statfmt" \{\} \+ |
+        sort ${reverse:+-r} -n |
+        if [ "$date_fmt" = "%s" ]; then
+            cat
+        else
+            while read -r d f; do
+                printf '%s\t%s\n' "$(date -j -f "%s" "$d" "+$date_fmt")" "$f"
+            done
+        fi
+else
+    find "$@" -type f -printf "${date_fmt//%/%T}"'\t%p\n' |
+        sort ${reverse:+-r} -n
+fi

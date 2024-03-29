@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+datefind=datefind
+if ! command -v datefind &>/dev/null; then
+    scriptdir=$(cd "$(dirname "$0")" && pwd -P)
+    if [ -e "$scriptdir/datefind" ]; then
+        datefind="$scriptdir/datefind"
+    fi
+fi
+
+"$datefind" "$@" | head -n 1
