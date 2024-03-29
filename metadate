@@ -1,0 +1,338 @@
+#!/usr/bin/env bash
+#
+# Set file dates based on metadata.
+#
+# Supported file types:
+# - PDF
+# - MSI
+# - PE / EXE
+# - Archives supported by `lsar`, using the newest dates of its contents
+# - Files with additional metadata available to `exiftool`, such as JPG
+#
+# Usage: metadate [-n] [-k] [-v] PATH [PATH..]
+#        -n  Dry run, do not actually change file dates
+#        -k  Keep going on error
+#        -v  Verbose, can be specified multiple times
+#
+# Note: We don't consider a failure to get a date from exiftool an actual error, as it's
+#       possible for a file to not have a date, and we don't want to error out on that.
+
+set -euo pipefail
+
+scriptdir=$(cd "$(dirname "$0")" && pwd -P)
+PATH="$scriptdir:$PATH"
+
+usage() {
+    echo >&2 "${0##*/} [-n] [-k] [-v] PATH [PATH..]"
+    exit 2
+}
+
+update_exit() {
+    update_dates "$@" ||
+        {
+            ret=$?
+            if [ $continue -eq 0 ]; then
+                exit $ret
+            fi
+        }
+}
+
+identify() {
+    file --dereference --brief --mime-type "$1"
+}
+
+metadate() {
+    local filepath=$1
+    local mime_type
+
+    if echo "$filepath" | grep -qi '\.dll$'; then
+        # We don't want to process DLLs, as they may be in use or modified.
+        return 0
+    fi
+
+    mime_type=$(identify "$filepath")
+    case "$mime_type" in
+    application/pdf)
+        pdfdate "$filepath"
+        ;;
+    application/x-msi)
+        msidate "$filepath"
+        ;;
+    application/x-dosexec|application/vnd.microsoft.portable-executable)
+        local fret=0
+        ardate "$filepath" || fret=$?
+        if [ $fret -eq 0 ] || [ $fret -ne 15 ]; then
+            return $fret
+        elif [ $fret -eq 15 ]; then
+            # As we're going based on mime type, it's possible to get an error due to
+            # older exe formats like MZ, NE, LE, etc, so suppress errors.
+            pedate "$filepath" 2>/dev/null
+        fi
+        ;;
+    application/postscript)
+        # Exiftool does find a CreateDate for .ps files, but it's only the date, not time.
+        # We set time to 00:00:00, as we don't have a better option.
+        local psdate
+        psdate=$(exiftooldate "$1" 2>/dev/null) || return 15
+        if [ -z "$psdate" ] || [ "$psdate" = " " ]; then
+            msg_debug "No date found in exiftool output for $1"
+            return 15
+        fi
+        psdate=$(TZ=UTC /bin/date -j -f "%m/%d/%y %H:%M:%S" "${psdate## } 00:00:00" "+%s")
+        echo "$psdate $psdate"
+        ;;
+    *)
+        local fret=0
+        ardate "$filepath" || fret=$?
+        if [ $fret -eq 0 ] || [ $fret -ne 15 ]; then
+            return $fret
+        elif [ $fret -eq 15 ]; then
+            if ! exifdate "$filepath" 2>/dev/null; then
+                # Skip this file, rather than erroring without -k.
+                return 20
+            fi
+        fi
+        ;;
+    esac
+}
+
+update_dates() {
+    for filepath; do
+        local filedates
+        local fret=0
+        filedates=$(metadate "$filepath") || fret=$?
+        if [ $fret -ne 0 ] || [ -z "$filedates" ] || [ "$filedates" = " " ]; then
+            msg_debug "No dates found for $filepath"
+            if [ $fret -ne 20 ] && [ $continue -eq 0 ]; then
+                echo >&2 "Exiting due to error on $filepath"
+                exit $fret
+            else
+                continue
+            fi
+        fi
+
+        set --
+        # shellcheck disable=SC2034
+        for i in $(seq 1 $verbose); do
+            set -- -v "$@"
+        done
+
+        filemodif=$(echo "$filedates" | cut -d' ' -f1)
+        if [ -n "$filemodif" ] && [ "$filemodif" != null ] && [ "$filemodif" != 0 ]; then
+            set -- -m "$filemodif" "$@"
+        fi
+
+        filecreate=$(echo "$filedates" | cut -d' ' -f2)
+        if [ -n "$filecreate" ] && [ "$filecreate" != null ] && [ "$filecreate" != 0 ]; then
+            set -- -c "$filecreate" "$@"
+        fi
+
+        if [ $verbose -gt 1 ]; then
+            printf "> "
+            printcmd setfiledate -o ${dry_run:+-n} "$@" "$filepath"
+        fi
+        setfiledate -o ${dry_run:+-n} "$@" "$filepath" || {
+            local fret=$?
+            if [ $continue -eq 0 ]; then
+                return $fret
+            fi
+        }
+    done
+}
+
+msg_debug() {
+    if [ $verbose -gt 1 ]; then
+        echo >&2 "$@"
+    fi
+}
+
+pdfdate() {
+    #CreationDate:    Wed Mar 23 12:42:34 2022 MST
+    #ModDate:         Wed Mar 23 12:42:34 2022 MST
+    local moddate modformatted creationdate creationformatted
+
+    if ! pdfinfo "$1" >"$tmpfile"; then
+        echo >&2 "Failed to read pdf date for $1"
+        return 1
+    fi
+
+    moddate=$(sed -ne 's/ModDate: *//p' "$tmpfile") || return $?
+    if [ -n "$moddate" ]; then
+        modformatted=$(pdfformat "$moddate") || return $?
+    else
+        modformatted=
+    fi
+
+    creationdate=$(sed -ne 's/CreationDate: *//p' "$tmpfile") || return $?
+    if [ -n "$creationdate" ]; then
+        creationformatted=$(pdfformat "$creationdate") || return $?
+    else
+        creationformatted=
+    fi
+
+    echo "$modformatted $creationformatted"
+}
+
+pdfformat() {
+    local filedate tz
+
+    filedate=$(echo "$1" | cut -d' ' -f-5)
+    tz=$(echo "$1" | cut -d' ' -f6)
+    if [ -z "$filedate" ] || [ -z "$tz" ]; then
+        return 1
+    fi
+    TZ="$tz" /bin/date -j -f "%a %b %e %T %Y" "$filedate" "+%s"
+}
+
+msidate() {
+    #Last printed: Fri Dec 11 04:47:44 2009
+    #Created: Fri Dec 11 04:47:44 2009
+    #Last saved: Fri Dec 11 04:47:44 2009
+    local moddate modformatted creationdate creationformatted
+
+    if ! msiinfo suminfo "$1" >"$tmpfile"; then
+        echo >&2 "Failed to read msi date for $1"
+        return 1
+    fi
+
+    moddate=$(sed -ne 's/Last saved: *//p' "$tmpfile") || return $?
+    if [ -z "$moddate" ]; then
+        return 1
+    fi
+    modformatted=$(msiformat "$moddate")
+
+    creationdate=$(sed -ne 's/Created: *//p' "$tmpfile") || return $?
+    if [ -z "$creationdate" ]; then
+        return 1
+    fi
+    creationformatted=$(msiformat "$creationdate")
+
+    echo "$modformatted $creationformatted"
+}
+
+msiformat() {
+    TZ=UTC /bin/date -j -f "%a %b %e %T %Y" "$1" "+%s"
+}
+
+readpedate() {
+    if ! readpe --header coff --format json "$1" | jq '.["COFF/File header"]["Date/time stamp"] | split(" ")[0] | tonumber'; then
+        echo >&2 "Failed to read PE date for $1"
+        return 1
+    fi
+}
+
+pedate() {
+    local date_seconds
+    date_seconds=$(readpedate "$1") || return $?
+    if [ -z "$date_seconds" ] || [ "$date_seconds" = null ] || [ "$date_seconds" = 0 ]; then
+        return 1
+    fi
+    echo "$date_seconds $date_seconds"
+}
+
+# zipdate() {
+#     local date_seconds
+#     date_seconds=$(exiftoolzipdate "$1") || return 15
+#     if [ -z "$date_seconds" ] || [ "$date_seconds" = " " ]; then
+#         local exifdate=$(exiftool -json -ZipModifyDate "$1" | jq -r '.[] | .ZipModifyDate // ""')
+#         if [ -n "$exifdate" ]; then
+#             if echo "$exifdate" | grep " 24:"; then
+#             fi
+#             TZ=UTC /bin/date -j -f "%Y:%m:%d %H:%M:%S" "$exifdate" "+%s" >&2
+#         fi
+#         echo "date: $exifdate" >&2
+#         msg_debug "No zip modify date found in exiftool output for $1"
+#         return 1
+#     fi
+#     echo "$date_seconds $date_seconds"
+# }
+
+# exiftoolzipdate() {
+#     exiftool -dateformat "%s" -json -ZipModifyDate "$1" |
+#         jq -r '.[] | .ZipModifyDate // ""'
+# }
+
+ardate() {
+    local date_seconds
+    date_seconds=$(lsardate "$1" 2>/dev/null) || return $?
+    if [ -z "$date_seconds" ] || [ "$date_seconds" = null ] || [ "$date_seconds" = 0 ]; then
+        return 1
+    fi
+    echo "$date_seconds $date_seconds"
+}
+
+lsardate() {
+    local ret=$?
+    lsar -nr -j "$1" >"$tmpfile" || ret=$?
+    if [ $ret -eq 1 ]; then
+        if ! jq --exit-status '.lsarContents | if . == [] then false else . or false end' <"$tmpfile" >/dev/null; then
+            # Not an archive, or empty archive, as is the case with a PDF
+            return 15
+        else
+            return 1
+        fi
+    fi
+    jq '[.lsarContents[].XADLastModificationDate | strptime("%Y-%m-%d %H:%M:%S") | strftime("%s") | tonumber] | sort | reverse | .[0]' <"$tmpfile" || return 1
+}
+
+msg_verbose() {
+    if [ $verbose -gt 0 ]; then
+        echo >&2 "$@"
+    fi
+}
+
+exifdate() {
+    local fulldate
+    fulldate=$(exiftooldate "$1" 2>/dev/null) || return 15
+    if [ -z "$fulldate" ] || [ "$fulldate" = " " ]; then
+        msg_debug "No date found in exiftool output for $1"
+        return 15
+    fi
+    echo "$fulldate"
+}
+
+exiftooldate() {
+    exiftool -dateformat "%s" -json -ModifyDate -CreateDate -DateTimeOriginal "$1" |
+        jq -r '.[] | [.ModifyDate // .DateTimeOriginal // "", .CreateDate // .DateTimeOriginal // ""] | map(. | tostring) | join(" ")'
+}
+
+dry_run=
+continue=0
+verbose=0
+while getopts nkvh opt; do
+    case "$opt" in
+    n)
+        dry_run=1
+        ;;
+    k)
+        continue=1
+        ;;
+    v)
+        verbose=$((verbose + 1))
+        ;;
+    \? | h)
+        usage
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+tmpfile=$(mktemp -t metadate.XXXXXX)
+trap 'rm -f "$tmpfile"' EXIT INT TERM
+
+ret=0
+for arg; do
+    if [ -d "$arg" ]; then
+        find -L "$arg" -type f -not -name .DS_Store |
+            while read -r filepath; do
+                if [ $continue -eq 1 ]; then
+                    update_exit "$filepath" || true
+                else
+                    update_exit "$filepath"
+                fi
+            done
+    else
+        update_exit "$arg"
+    fi
+done
+exit $ret
