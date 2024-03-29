@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+    echo >&2 "${0##*/} DIRECTORY [DIRECTORY..]"
+    exit 2
+}
+
+dirinfo() {
+    local directory=$1
+    local tmpfile=$2
+    local datefind=$3
+
+    if [ $MACOS -eq 1 ]; then
+        "$datefind" -f "%s" "$directory" >> "$tmpfile"
+    else
+        "$datefind" "$directory" >> "$tmpfile"
+    fi
+    newest=$(tail -n 1 "$tmpfile")
+    newest_date=$(datefmt "$(echo "$newest" | cut -d$'\t' -f 1)")
+    newest_path=$(echo "$newest" | cut -d$'\t' -f 2-)
+    oldest=$(head -n 1 "$tmpfile")
+    oldest_date=$(datefmt "$(echo "$oldest" | cut -d$'\t' -f 1)")
+    oldest_path=$(echo "$oldest" | cut -d$'\t' -f 2-)
+    echo "$directory: file count: $(wc -l <"$tmpfile" | xargs)"
+    echo "$directory: size: $(du -sh "$directory" | awk '{print $1}')"
+    echo "$directory: oldest file: $oldest_date $oldest_path"
+    echo "$directory: newest file: $newest_date $newest_path"
+}
+
+datefmt() {
+    local date=$1
+    if [ $MACOS -eq 1 ]; then
+        date -r "$date" "+%Y-%m-%d %H:%M"
+    else
+        date -d "@$date" "+%Y-%m-%d %H:%M"
+    fi
+}
+
+while getopts h opt; do
+    case "$opt" in
+        \? | h)
+            usage
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ $# -eq 0 ]; then
+    set -- .
+fi
+
+case "${OSTYPE:-}" in
+    darwin*)
+        MACOS=1
+        ;;
+    *)
+        MACOS=0
+        ;;
+esac
+
+tmpfile=$(mktemp -t dirinfo.XXXXXXXXXX)
+trap 'rm -f "$tmpfile"' EXIT
+
+datefind=datefind
+if ! command -v datefind &>/dev/null; then
+    scriptdir=$(cd "$(dirname "$0")" && pwd -P)
+    if [ -e "$scriptdir/datefind" ]; then
+        datefind="$scriptdir/datefind"
+    fi
+fi
+
+for arg; do
+    dirinfo "$arg" "$tmpfile" "$datefind"
+done
