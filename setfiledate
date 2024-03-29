@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+    echo >&2 "${0##*/} DATE_SECONDS PATH [PATH..]"
+    exit 2
+}
+
+update_exit() {
+    update_dates "$@" ||
+        {
+            ret=$?
+            if [ $continue -eq 0 ]; then
+                exit $ret
+            fi
+        }
+}
+
+update_dates() {
+    for filepath; do
+        existing_create=$(/usr/bin/stat -f "%B" "$filepath")
+
+        if [ -n "$date_modif" ]; then
+            existing_modif=$(/usr/bin/stat -f "%m" "$filepath")
+            if [ $safe -eq 1 ] && [ "$existing_modif" -gt "$existing_create" ]; then
+                echo >&2 "$filepath: modification date $existing_modif > creation date $existing_create, assuming user-modified file"
+                continue
+            fi
+
+            if [ "$existing_modif" != "$date_modif" ]; then
+                if [ $older -eq 1 ] && [ "$date_modif" -gt "$existing_modif" ]; then
+                    # Skip if the new date is newer than the existing
+                    continue
+                fi
+                touch_date=$(/bin/date -j -f "$date_format" "$date_modif" "+%Y-%m-%dT%H:%M:%S")
+                if [ $verbose -gt 0 ]; then
+                    existing_date=$(/bin/date -j -f "$date_format" "$existing_modif" "+%Y-%m-%dT%H:%M:%S")
+                    echo >&2 "$filepath: modification date $existing_date -> $touch_date"
+                fi
+
+                ${dry_run:+echo "> "}touch -d "$touch_date" "$filepath"
+            fi
+        fi
+
+        if [ -n "$date_create" ] && [ "$existing_create" != "$date_create" ]; then
+                if [ $older -eq 1 ] && [ "$date_create" -gt "$existing_create" ]; then
+                    # Skip if the new date is newer than the existing
+                    continue
+                fi
+                setfile_date=$(/bin/date -j -f "$date_format" "$date_create" "+%m/%d/%Y %H:%M:%S")
+                if [ $verbose -gt 0 ]; then
+                    create_date=$(/bin/date -j -f "$date_format" "$existing_create" "+%Y-%m-%dT%H:%M:%S")
+                    echo >&2 "$filepath: creation date $create_date -> $setfile_date"
+                fi
+
+                ${dry_run:+echo "> "}SetFile -d "$setfile_date" "$filepath"
+        fi
+    done
+}
+
+dry_run=
+continue=0
+verbose=0
+date_modif=
+date_create=
+date_format="%s"
+older=0
+safe=0
+while getopts nkvm:c:f:osh opt; do
+    case "$opt" in
+    n)
+        dry_run=1
+        ;;
+    k)
+        continue=1
+        ;;
+    v)
+        verbose=$((verbose + 1))
+        ;;
+    m)
+        date_modif="$OPTARG"
+        if [ -z "$date_modif" ] || [ "$date_modif" = null ] || [ "$date_modif" = 0 ]; then
+            echo >&2 "Invalid DATE_MODIF value: '$date_modif'"
+            usage
+        fi
+        ;;
+    c)
+        date_create="$OPTARG"
+        if [ -z "$date_create" ] || [ "$date_create" = null ] || [ "$date_create" = 0 ]; then
+            echo >&2 "Invalid DATE_CREATE value: '$date_create'"
+            usage
+        fi
+        ;;
+    f)
+        date_format="$OPTARG"
+        ;;
+    o)
+        older=1
+        ;;
+    s)
+        safe=1
+        ;;
+    \? | h)
+        usage
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ -z "$date_modif" ] && [ -z "$date_create" ]; then
+    # Nothing to do
+    exit 0
+fi
+
+ret=0
+for arg; do
+    if [ -d "$arg" ]; then
+        find "$arg/" -type f |
+            while read -r filepath; do
+                update_exit "$filepath"
+            done
+    else
+        update_exit "$arg"
+    fi
+done
+exit $ret
