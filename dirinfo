@@ -7,6 +7,28 @@ usage() {
     exit 2
 }
 
+oldest() {
+    local tmpfile=$1
+    local counter=1
+    local max
+    local line
+
+    max=$(wc -l <"$tmpfile" | xargs)
+    while [ $counter -le "$max" ]; do
+        line=$(head -n "$counter" "$tmpfile" | tail -n 1)
+        date=$(echo "$line" | cut -d$'\t' -f 1)
+        case "$date" in
+            '' | *[!0-9]* | 0 | 25200)
+                ;;
+            *)
+                printf '%s\n' "$line"
+                break
+                ;;
+        esac
+        counter=$((counter + 1))
+    done
+}
+
 dirinfo() {
     local directory=$1
     local tmpfile=$2
@@ -17,12 +39,15 @@ dirinfo() {
     else
         "$datefind" "$directory" >> "$tmpfile"
     fi
+
     newest=$(tail -n 1 "$tmpfile")
     newest_date=$(datefmt "$(echo "$newest" | cut -d$'\t' -f 1)")
     newest_path=$(echo "$newest" | cut -d$'\t' -f 2-)
-    oldest=$(head -n 1 "$tmpfile")
+
+    oldest=$(oldest "$tmpfile" | tr -d '\r\n')
     oldest_date=$(datefmt "$(echo "$oldest" | cut -d$'\t' -f 1)")
     oldest_path=$(echo "$oldest" | cut -d$'\t' -f 2-)
+
     echo "$directory: file count: $(wc -l <"$tmpfile" | xargs)"
     echo "$directory: size: $(du -sh "$directory" | awk '{print $1}')"
     echo "$directory: oldest file: $oldest_date $oldest_path"
