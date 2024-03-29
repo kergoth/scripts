@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""'creationdate' is a small utility to set the modification dates of files from their creation dates."""
+
+import argparse
+import os
+from datetime import datetime
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Set modification dates from creation dates for files."
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("-n", "--dry-run", action="store_true", help="Dry run")
+    parser.add_argument(
+        "-t", "--ignore-time", action="store_true", help="Ignore time in comparison"
+    )
+    parser.add_argument("files", nargs="*", help="Files or directories")
+    args = parser.parse_args()
+    for file_path in args.files:
+        if not os.path.exists(file_path):
+            parser.error(f"{file_path} does not exist")
+
+    for file_path, mtime, birthtime in should_set_modification_date(
+        args.files, args.ignore_time
+    ):
+        if args.verbose:
+            print(
+                f"Setting modification date of {file_path} from {datetime.fromtimestamp(mtime)} to {datetime.fromtimestamp(birthtime)}"
+            )
+        if not args.dry_run:
+            os.utime(file_path, (birthtime, birthtime))
+
+
+def should_set_modification_date(file_paths, ignore_time=False):
+    for file_path in file_paths:
+        if os.path.isdir(file_path):
+            for root, dirs, filenames in os.walk(file_path):
+                yield from should_set_modification_date(
+                    [os.path.join(root, f) for f in filenames], ignore_time
+                )
+        else:
+            stat = os.stat(file_path)
+            if ignore_time:
+                birthtime = datetime.fromtimestamp(stat.st_birthtime).date()
+                mtime = datetime.fromtimestamp(stat.st_mtime).date()
+                should_set = mtime > birthtime
+            else:
+                should_set = stat.st_mtime > stat.st_birthtime
+
+            if should_set:
+                yield file_path, stat.st_mtime, stat.st_birthtime
+
+
+if __name__ == "__main__":
+    main()
