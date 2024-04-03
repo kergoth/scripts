@@ -53,13 +53,13 @@ if [ $MACOS -eq 1 ]; then
         statfmt="%m%t%N"
     fi
 
-    find "$@" -type f -exec stat -f "$statfmt" \{\} \+ |
+    find "$@" -type f -exec /usr/bin/stat -f "$statfmt" \{\} \+ |
         sort ${reverse:+-r} -n |
         if [ "$date_fmt" = "%s" ]; then
             cat
         else
             while read -r d f; do
-                printf '%s\t%s\n' "$(date -j -f "%s" "$d" "+$date_fmt")" "$f"
+                printf '%s\t%s\n' "$(/bin/date -j -f "%s" "$d" "+$date_fmt")" "$f"
             done
         fi
 else
