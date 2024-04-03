@@ -44,7 +44,7 @@ esac
 if [ $# -eq 0 ]; then
     set -- .
 fi
-set -- "$@" \( -not -name .DS_Store -a -not -name .\* -a -not -wholename \*/.\* \) -a
+set -- "$@" \( -not -name .DS_Store -a -not -name .\* -a -not -wholename \*/.\* -a -not -wholename \*/@eaDir/\* \) -a
 
 if [ $MACOS -eq 1 ]; then
     if [ $birth_date -eq 1 ]; then
