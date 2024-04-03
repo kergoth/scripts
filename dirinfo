@@ -59,7 +59,7 @@ datefmt() {
     if [ $MACOS -eq 1 ]; then
         date -r "$date" "+%Y-%m-%d %H:%M"
     else
-        date -d "@$date" "+%Y-%m-%d %H:%M"
+        echo "$date"
     fi
 }
 
