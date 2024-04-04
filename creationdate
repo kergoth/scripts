@@ -39,7 +39,7 @@ def should_set_modification_date(file_paths, ignore_time=False):
                 yield from should_set_modification_date(
                     [os.path.join(root, f) for f in filenames], ignore_time
                 )
-        else:
+        elif os.path.exists(file_path):
             stat = os.stat(file_path)
             if ignore_time:
                 birthtime = datetime.fromtimestamp(stat.st_birthtime).date()
