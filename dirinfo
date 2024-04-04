@@ -35,9 +35,9 @@ dirinfo() {
     local datefind=$3
 
     if [ $MACOS -eq 1 ]; then
-        "$datefind" -f "%s" "$directory" >> "$tmpfile"
+        "$datefind" -f "%s" "$directory" > "$tmpfile"
     else
-        "$datefind" "$directory" >> "$tmpfile"
+        "$datefind" "$directory" > "$tmpfile"
     fi
 
     newest=$(tail -n 1 "$tmpfile")
