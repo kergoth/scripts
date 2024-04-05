@@ -54,9 +54,11 @@ metadate() {
     case "$mime_type" in
     application/pdf)
         pdfdate "$filepath"
+        return $?
         ;;
     application/x-msi)
         msidate "$filepath"
+        return $?
         ;;
     application/x-dosexec|application/vnd.microsoft.portable-executable)
         local fret=0
@@ -68,6 +70,7 @@ metadate() {
             # older exe formats like MZ, NE, LE, etc, so suppress errors.
             pedate "$filepath" 2>/dev/null
         fi
+        return $?
         ;;
     application/postscript)
         # Exiftool does find a CreateDate for .ps files, but it's only the date, not time.
@@ -80,20 +83,25 @@ metadate() {
         fi
         psdate=$(TZ=UTC /bin/date -j -f "%m/%d/%y %H:%M:%S" "${psdate## } 00:00:00" "+%s")
         echo "$psdate $psdate"
+        return 0
         ;;
-    *)
-        local fret=0
-        ardate "$filepath" || fret=$?
-        if [ $fret -eq 0 ] || [ $fret -ne 15 ]; then
-            return $fret
-        elif [ $fret -eq 15 ]; then
-            if ! exifdate "$filepath" 2>/dev/null; then
-                # Skip this file, rather than erroring without -k.
-                return 20
-            fi
+    application/x-ima)
+        if mdirdate "$filepath"; then
+            return 0
         fi
         ;;
     esac
+
+    local fret=0
+    ardate "$filepath" || fret=$?
+    if [ $fret -eq 0 ] || [ $fret -ne 15 ]; then
+        return $fret
+    elif [ $fret -eq 15 ]; then
+        if ! exifdate "$filepath" 2>/dev/null; then
+            # Skip this file, rather than erroring without -k.
+            return 20
+        fi
+    fi
 }
 
 update_dates() {
@@ -251,6 +259,23 @@ pedate() {
 #     exiftool -dateformat "%s" -json -ZipModifyDate "$1" |
 #         jq -r '.[] | .ZipModifyDate // ""'
 # }
+
+mdirdate() {
+    local date date_seconds
+    mdir -a -f -s -i "$1" >"$tmpfile" || :
+    if [ -s "$tmpfile" ]; then
+        date=$(cat "$tmpfile" | grep -Ev 'Directory for |Total files listed|^\.* |^ |^$|<DIR>' | cut -c24- | sed -e 's/   */ /g; s/ $//;' | sort -n | tail -n 1)
+        if [ -z "$date" ]; then
+            msg_debug "No date found in mdir output for $1"
+            return 1
+        fi
+        date_seconds=$(TZ=UTC /bin/date -j -f "%Y-%m-%d %H:%M" "$date" "+%s")
+        echo "$date_seconds $date_seconds"
+    else
+        msg_debug "Failed to read mdir date for $1"
+        return 1
+    fi
+}
 
 ardate() {
     local date_seconds
