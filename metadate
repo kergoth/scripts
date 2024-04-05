@@ -264,7 +264,7 @@ mdirdate() {
     local date date_seconds
     mdir -a -f -s -i "$1" >"$tmpfile" || :
     if [ -s "$tmpfile" ]; then
-        date=$(cat "$tmpfile" | grep -Ev 'Directory for |Total files listed|^\.* |^ |^$|<DIR>' | cut -c24- | sed -e 's/   */ /g; s/ $//;' | sort -n | tail -n 1)
+        date=$(cat "$tmpfile" | grep -Ev 'Directory for |Total files listed|^\.* |^ |^$|<DIR>' | sed -e 's/.* \([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]  *[0-9][0-9]*:[0-9][0-9]\) *$/\1/g' | LC_ALL=C sort -n | tail -n 1)
         if [ -z "$date" ]; then
             msg_debug "No date found in mdir output for $1"
             return 1
