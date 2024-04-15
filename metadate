@@ -79,19 +79,21 @@ metadate() {
     application/postscript)
         # Exiftool does find a CreateDate for .ps files, but it's only the date, not time.
         # We set time to 00:00:00, as we don't have a better option.
-        local psdate
+        local psdate modifdate createdate
         psdate=$(exiftooldate "$1" 2>/dev/null) || return 15
         if [ -z "$psdate" ] || [ "$psdate" = " " ]; then
             msg_debug "No date found in exiftool output for $1"
             return 15
         fi
-
-        local newpsdate
-        if ! newpsdate=$(TZ=UTC /bin/date -j -f "%m/%d/%y %H:%M:%S" "${psdate## } 00:00:00" "+%s" 2>/dev/null); then
-            # "Thu Apr  7 07:22:06 2011"
-            newpsdate=$(TZ=UTC /bin/date -j -f "%a %b %d %H:%M:%S %Y" "${psdate## }" "+%s")
+        modifdate=$(echo "$psdate" | cut -d$'\t' -f1)
+        createdate=$(echo "$psdate" | cut -d$'\t' -f2)
+        if [ -n "$modifdate" ]; then
+            modifdate=$(from_psdate "$modifdate")
         fi
-        echo "$newpsdate $newpsdate"
+        if [ -n "$createdate" ]; then
+            createdate=$(from_psdate "$createdate")
+        fi
+        echo "$modifdate $createdate"
         return 0
         ;;
     application/x-ima)
@@ -111,6 +113,15 @@ metadate() {
             return 20
         fi
     fi
+}
+
+from_psdate() {
+    local psdate="$1"
+    if ! psdate=$(TZ=UTC /bin/date -j -f "%m/%d/%y %H:%M:%S" "${1## } 00:00:00" "+%s" 2>/dev/null); then
+        # "Thu Apr  7 07:22:06 2011"
+        psdate=$(TZ=UTC /bin/date -j -f "%a %b %d %H:%M:%S %Y" "${1## }" "+%s")
+    fi
+    echo "$psdate"
 }
 
 update_dates() {
@@ -341,7 +352,7 @@ msg_verbose() {
 
 exifdate() {
     local fulldate
-    fulldate=$(exiftooldate "$1" 2>/dev/null) || return 15
+    fulldate=$(exiftooldate "$1" 2>/dev/null | tr '\t' ' ') || return 15
     if [ -z "$fulldate" ] || [ "$fulldate" = " " ]; then
         msg_debug "No date found in exiftool output for $1"
         return 15
@@ -351,7 +362,7 @@ exifdate() {
 
 exiftooldate() {
     exiftool -dateformat "%s" -json -ModifyDate -CreateDate -DateTimeOriginal "$1" |
-        jq -r '.[] | [.ModifyDate // .DateTimeOriginal // "", .CreateDate // .DateTimeOriginal // ""] | map(. | tostring) | join(" ")'
+        jq -r '.[] | [.ModifyDate // .DateTimeOriginal // "", .CreateDate // .DateTimeOriginal // ""] | map(. | tostring) | join("\t")'
 }
 
 case "${OSTYPE:-}" in
