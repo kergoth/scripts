@@ -6,6 +6,9 @@
 # - PDF
 # - MSI
 # - PE / EXE
+# - DOS Disk Images (mtools-compatible)
+# - OFX
+# - QFX
 # - Archives supported by `lsar`, using the newest dates of its contents
 # - Files with additional metadata available to `exiftool`, such as JPG
 #
