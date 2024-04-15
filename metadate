@@ -9,7 +9,9 @@
 # - Archives supported by `lsar`, using the newest dates of its contents
 # - Files with additional metadata available to `exiftool`, such as JPG
 #
-# Usage: metadate [-n] [-k] [-v] PATH [PATH..]
+# Usage: metadate [-c] [-m] [-n] [-k] [-v] PATH [PATH..]
+#        -c  Set creation date. (Default enabled on macOS, disabled elsewhere)
+#        -m  Set modification date. (Default disabled on macOS, enabled elsewhere)
 #        -n  Dry run, do not actually change file dates
 #        -k  Keep going on error
 #        -v  Verbose, can be specified multiple times
@@ -23,7 +25,7 @@ scriptdir=$(cd "$(dirname "$0")" && pwd -P)
 PATH="$scriptdir:$PATH"
 
 usage() {
-    echo >&2 "${0##*/} [-n] [-k] [-v] PATH [PATH..]"
+    echo >&2 "${0##*/} [-c] [-m] [-n] [-k] [-v] PATH [PATH..]"
     exit 2
 }
 
@@ -120,20 +122,44 @@ update_dates() {
         fi
 
         set --
+
+        if [ $set_modify -eq 1 ]; then
+            filemodif=$(echo "$filedates" | cut -d' ' -f1)
+            # shellcheck disable=SC1001
+            case "$filemodif" in
+                *[a-zA-Z:_\-]*)
+                    # Invalid
+                    filemodif=
+                    ;;
+            esac
+            if [ -n "$filemodif" ] && [ "$filemodif" != null ] && [ "$filemodif" != 0 ]; then
+                set -- -m "$filemodif" "$@"
+            fi
+        fi
+
+        if [ $set_create -eq 1 ]; then
+            filecreate=$(echo "$filedates" | cut -d' ' -f2)
+            # shellcheck disable=SC1001
+            case "$filecreate" in
+                *[a-zA-Z:_\-]*)
+                    # Invalid
+                    filecreate=
+                    ;;
+            esac
+            if [ -n "$filecreate" ] && [ "$filecreate" != null ] && [ "$filecreate" != 0 ]; then
+                set -- -c "$filecreate" "$@"
+            fi
+        fi
+
+        if [ $# -eq 0 ]; then
+            # Nothing to set
+            return
+        fi
+
         # shellcheck disable=SC2034
         for i in $(seq 1 $verbose); do
             set -- -v "$@"
         done
-
-        filemodif=$(echo "$filedates" | cut -d' ' -f1)
-        if [ -n "$filemodif" ] && [ "$filemodif" != null ] && [ "$filemodif" != 0 ]; then
-            set -- -m "$filemodif" "$@"
-        fi
-
-        filecreate=$(echo "$filedates" | cut -d' ' -f2)
-        if [ -n "$filecreate" ] && [ "$filecreate" != null ] && [ "$filecreate" != 0 ]; then
-            set -- -c "$filecreate" "$@"
-        fi
 
         if [ $verbose -gt 1 ]; then
             printf "> "
@@ -269,7 +295,7 @@ mdirdate() {
             msg_debug "No date found in mdir output for $1"
             return 1
         fi
-        date_seconds=$(TZ=UTC /bin/date -j -f "%Y-%m-%d %H:%M" "$date" "+%s")
+        date_seconds=$(TZ=UTC /bin/date -j -f "%Y-%m-%d %H:%M:%S" "$date:00" "+%s")
         echo "$date_seconds $date_seconds"
     else
         msg_debug "Failed to read mdir date for $1"
@@ -301,7 +327,7 @@ lsardate() {
 }
 
 msg_verbose() {
-    if [ $verbose -gt 0 ]; then
+    if [ "$verbose" = 0 ]; then
         echo >&2 "$@"
     fi
 }
@@ -321,11 +347,32 @@ exiftooldate() {
         jq -r '.[] | [.ModifyDate // .DateTimeOriginal // "", .CreateDate // .DateTimeOriginal // ""] | map(. | tostring) | join(" ")'
 }
 
+case "${OSTYPE:-}" in
+    darwin*)
+        IS_MAC=1
+        ;;
+    *)
+        IS_MAC=0
+        ;;
+esac
+
+set_create=
+set_modify=
 dry_run=
 continue=0
 verbose=0
-while getopts nkvh opt; do
+while getopts cmnkvh opt; do
     case "$opt" in
+    c)
+        if [ $IS_MAC -eq 0 ]; then
+            echo >&2 "Error: setting creation date on non-macOS systems is unsupported at this time."
+            exit 2
+        fi
+        set_create=1
+        ;;
+    m)
+        set_modify=1
+        ;;
     n)
         dry_run=1
         ;;
@@ -341,6 +388,21 @@ while getopts nkvh opt; do
     esac
 done
 shift $((OPTIND - 1))
+
+if [ -z "$set_create" ]; then
+    if [ "$IS_MAC" -eq 1 ]; then
+        set_create=1
+    else
+        set_create=0
+    fi
+fi
+if [ -z "$set_modify" ]; then
+    if [ "$IS_MAC" -eq 1 ]; then
+        set_modify=0
+    else
+        set_modify=1
+    fi
+fi
 
 tmpfile=$(mktemp -t metadate.XXXXXX)
 trap 'rm -f "$tmpfile"' EXIT INT TERM
