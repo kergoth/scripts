@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+
+import codecs
+import sys
+
+from ofxparse import OfxParser
+
+for filepath in sys.argv[1:]:
+    with codecs.open(filepath) as fileobj:
+        ofx = OfxParser.parse(fileobj)
+        account = ofx.account
+        statement = account.statement
+        print(statement.end_date.strftime("%s"))
