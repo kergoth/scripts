@@ -85,8 +85,13 @@ metadate() {
             msg_debug "No date found in exiftool output for $1"
             return 15
         fi
-        psdate=$(TZ=UTC /bin/date -j -f "%m/%d/%y %H:%M:%S" "${psdate## } 00:00:00" "+%s")
-        echo "$psdate $psdate"
+
+        local newpsdate
+        if ! newpsdate=$(TZ=UTC /bin/date -j -f "%m/%d/%y %H:%M:%S" "${psdate## } 00:00:00" "+%s" 2>/dev/null); then
+            # "Thu Apr  7 07:22:06 2011"
+            newpsdate=$(TZ=UTC /bin/date -j -f "%a %b %d %H:%M:%S %Y" "${psdate## }" "+%s")
+        fi
+        echo "$newpsdate $newpsdate"
         return 0
         ;;
     application/x-ima)
