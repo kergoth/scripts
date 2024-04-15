@@ -99,7 +99,23 @@ metadate() {
     application/x-ima)
         if mdirdate "$filepath"; then
             return 0
+        else
+            return 20
         fi
+        ;;
+    text/plain)
+        local odate
+        case "$filepath" in
+            *.ofx|*.qfx)
+                odate=$(ofxdate "$filepath") || return 1
+                if [ -z "$odate" ]; then
+                    return 1
+                fi
+                echo "$odate $odate"
+                return 0
+                ;;
+        esac
+        return 20
         ;;
     esac
 
