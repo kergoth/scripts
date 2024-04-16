@@ -74,7 +74,6 @@ def should_set_modification_date(file_paths, ignore_time=False, exclude=None):
                         for d in dirs
                         if not any(e.search(d) for e in exclude)
                     ]
-                    print(dirs)
 
                 yield from should_set_modification_date(
                     [os.path.join(root, f) for f in filenames], ignore_time, exclude
