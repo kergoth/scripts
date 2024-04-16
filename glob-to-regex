@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+
+"""This script converts a glob pattern to a regular expression."""
+
+import argparse
+import fnmatch
+import re
+
+PLACEHOLDER = "!PLACEHOLDER!"
+PLACEHOLDER2 = "!PLACEHOLDER2!"
+
+
+def glob_to_regex(pattern, word_boundaries=False):
+    pattern = pattern.replace("**", PLACEHOLDER)
+    if word_boundaries:
+        pattern = pattern.replace(r"\b", PLACEHOLDER2)
+
+    regex = fnmatch.translate(pattern)
+    regex = regex.replace(r".*", r"[^/]*")
+
+    regex = regex.replace(PLACEHOLDER, r".*?")
+    if word_boundaries:
+        regex = regex.replace(PLACEHOLDER2, r"\b")
+
+    regex = regex.replace(r"\Z", r"$")
+    return regex
+
+
+def enhanced_translate(pattern, whole_word=False, rsync=False, anywhere=False, anchored=False):
+    if rsync and pattern.startswith("/"):
+        pattern = pattern[1:]
+        anchored = True
+    else:
+        anchored = False
+
+    if whole_word:
+        pattern = r"\b" + pattern + r"\b"
+
+    if anywhere:
+        pattern = r"*" + pattern + r"*"
+
+    regex = glob_to_regex(pattern, word_boundaries=whole_word)
+
+    if anchored:
+        regex = "(?:^/?)" + regex
+    else:
+        regex = "(?:^|/)" + regex
+
+    return regex
+
+
+def enhanced_fnmatch(name, pat, flags=0, **kwargs):
+    pat = enhanced_translate(pat, **kwargs)
+    return re.search(pat.lower(), name.lower(), flags)
+
+
+def enhanced_fnmatchcase(name, pat, flags=0, **kwargs):
+    pat = enhanced_translate(pat, **kwargs)
+    return re.search(pat, name, flags)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-r",
+        "--rsync",
+        help="Interpret a leading / the same as rsync does in its filter rules.",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-w",
+        "--word",
+        action="store_true",
+        help="Match whole words only. Implies --word-boundaries.",
+    )
+    parser.add_argument(
+        "-b",
+        "--word-boundaries",
+        action="store_true",
+        help="Support \\b for word boundary matching.",
+    )
+    parser.add_argument(
+        "-a", "--anywhere", action="store_true", help="Match anywhere in the string."
+    )
+    parser.add_argument("pattern", nargs="*")
+    args = parser.parse_args()
+    if args.word:
+        args.word_boundaries = True
+
+    for pat in args.pattern:
+        if args.rsync and pat.startswith("/"):
+            pat = pat[1:]
+            anchored = True
+        else:
+            anchored = False
+
+        if args.word:
+            pat = r"\b" + pat + r"\b"
+
+        if args.anywhere:
+            pat = r"*" + pat + r"*"
+
+        regex = glob_to_regex(pat, word_boundaries=args.word_boundaries)
+
+        if anchored:
+            regex = "(?:^/?)" + regex
+        else:
+            regex = "(?:^|/)" + regex
+
+        re.compile(regex)
+        print(regex)
+
+
+if __name__ == "__main__":
+    main()
