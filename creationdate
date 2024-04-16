@@ -45,7 +45,9 @@ def main():
 
     for i, pattern in enumerate(args.exclude):
         try:
-            args.exclude[i] = re.compile(glob_to_regex.enhanced_translate(pattern, rsync=True))
+            args.exclude[i] = re.compile(
+                glob_to_regex.enhanced_translate(pattern, rsync=True)
+            )
         except re.error as e:
             parser.error(f"Invalid exclude pattern: {e}")
 
@@ -69,11 +71,7 @@ def should_set_modification_date(file_paths, ignore_time=False, exclude=None):
         if os.path.isdir(file_path):
             for root, dirs, filenames in os.walk(file_path):
                 if exclude:
-                    dirs[:] = [
-                        d
-                        for d in dirs
-                        if not any(e.search(d) for e in exclude)
-                    ]
+                    dirs[:] = [d for d in dirs if not any(e.search(d) for e in exclude)]
 
                 yield from should_set_modification_date(
                     [os.path.join(root, f) for f in filenames], ignore_time, exclude
