@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+gh api --paginate users/"$1"/repos \
+    | jq -r '.[] | select(.fork) | .url' \
+    | cut -d/ -f4- \
+    | nlxargs -n 1 gh api \
+    | jq -r .parent.html_url
