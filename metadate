@@ -120,6 +120,10 @@ metadate() {
         esac
         return 20
         ;;
+    application/x-lzma|application/x-xz)
+        ardate "$filepath" || return $?
+        return 0
+        ;;
     esac
 
     local fret=0
