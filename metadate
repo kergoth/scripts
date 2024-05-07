@@ -385,7 +385,7 @@ exifdate() {
 
 exiftooldate() {
     exiftool -dateformat "%s" -json -ModifyDate -CreateDate -DateTimeOriginal "$1" |
-        jq -r '.[] | [.ModifyDate // .DateTimeOriginal // .CreateDate // "", .CreateDate // .DateTimeOriginal // ""] | map(. | tostring) | join("\t")'
+        jq -r '.[] | [.ModifyDate // .MediaModifyDate // .DateTimeOriginal // .CreateDate // "", .CreateDate // .MediaCreateDate // .DateTimeOriginal // ""] | map(. | tostring) | join("\t")'
 }
 
 case "${OSTYPE:-}" in
