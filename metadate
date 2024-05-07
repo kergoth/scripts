@@ -142,7 +142,9 @@ from_psdate() {
     local psdate="$1"
     if ! psdate=$(TZ=UTC /bin/date -j -f "%m/%d/%y %H:%M:%S" "${1## } 00:00:00" "+%s" 2>/dev/null); then
         # "Thu Apr  7 07:22:06 2011"
-        psdate=$(TZ=UTC /bin/date -j -f "%a %b %d %H:%M:%S %Y" "${1## }" "+%s")
+        if ! psdate=$(TZ=UTC /bin/date -j -f "%a %b %d %H:%M:%S %Y" "${1## }" "+%s"); then
+            psdate="$1"
+        fi
     fi
     echo "$psdate"
 }
