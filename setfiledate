@@ -29,7 +29,7 @@ update_dates() {
             fi
 
             if [ "$existing_modif" != "$date_modif" ]; then
-                if [ $older -eq 1 ] && [ "$date_modif" -gt "$existing_modif" ]; then
+                if [ $older -eq 1 ] && [ "$existing_modif" != 0 ] && [ "$date_modif" -gt "$existing_modif" ]; then
                     # Skip if the new date is newer than the existing
                     echo >&2 "$filepath: modification date $date_modif older than existing $existing_modif, skipping"
                     continue
