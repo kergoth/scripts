@@ -31,7 +31,9 @@ update_dates() {
             if [ "$existing_modif" != "$date_modif" ]; then
                 if [ $older -eq 1 ] && [ "$existing_modif" != 0 ] && [ "$date_modif" -gt "$existing_modif" ]; then
                     # Skip if the new date is newer than the existing
-                    echo >&2 "$filepath: modification date $date_modif older than existing $existing_modif, skipping"
+                    if [ $verbose -gt 0 ]; then
+                        echo >&2 "$filepath: modification date $date_modif older than existing $existing_modif, skipping"
+                    fi
                     continue
                 fi
                 touch_date=$(/bin/date -j -f "$date_format" "$date_modif" "+%Y-%m-%dT%H:%M:%S")
