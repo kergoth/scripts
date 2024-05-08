@@ -10,4 +10,4 @@ case "$VISUAL" in
         VISUAL=zed
         ;;
 esac
-exec "$VISUAL" "$@"
+exec $VISUAL "$@"
