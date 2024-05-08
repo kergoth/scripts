@@ -5,5 +5,9 @@ case "$VISUAL" in
         # Synchronous editing via GUI, switch to async
         VISUAL=code
         ;;
+    zed\ --wait)
+        # Synchronous editing via GUI, switch to async
+        VISUAL=zed
+        ;;
 esac
 exec "$VISUAL" "$@"
