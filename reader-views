@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+nonarticle_tags () {
+    cat <<END
+apps
+books
+channels
+comics
+courses
+do
+eat & drink
+feeds
+fonts
+games
+Listen
+magazines
+movie
+newsletters
+not-to-read
+# I'm not going to read online books in their existing form, but prefer to scrape them into an epub.
+online books
+patronage
+podcasts
+products
+services
+share
+shops
+sites
+software
+tv
+video
+webapps
+webgames
+END
+}
+
+to_read=$(nonarticle_tags | grep -Ev '^ *$|^#' | sed -e 's#^#tag__not:#; s#$# AND #;' | xargs | sed -e 's# AND$##')
+to_do=$(nonarticle_tags | grep -Ev '^ *$|^#' | sed -e 's#^#tag:#; s#$# OR #;' | xargs | sed -e 's# OR$##')
+
+printf "🗞️ To Read: tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND %s )\n" "$to_read"
+printf "🛜 To Read Online: tag:\"to read online\" AND tag__not:\"online books\"\n"
+printf "⏱ Quick Reads: minutes__gt:1.9 AND minutes__lt:10 AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND %s ) )\n" "$to_read"
+printf "☑️ To Do: tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( %s )\n" "$to_do"
+printf "🏷️ Untagged: has__not:tags\n"
+# If an article is tagged as "to read", but has an unknown length, then it likely *is* readable, just that the length is unknown. In such a case, it should be included in the "To Read" list, but not in the "Unknown Length" list.
+printf "🚨 Unknown Length: minutes:0 AND tag__not:\"to read\" AND ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND %s )\n" "$to_read"
+# Very short items are often a red flag, as they're often not actually an article, but potentially a product page or other similar case where Reader is unable to parse it into article text.
+#   Feed items often are short, so don't consider very short feed items as a red flag.
+printf "🚨 Very Quick Reads: minutes__gt:0 AND minutes__lt:2 AND category__not:rss AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND %s ) )\n" "$to_read"
