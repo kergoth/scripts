@@ -5,12 +5,14 @@ set -euo pipefail
 nonarticle_tags () {
     cat <<END
 apps
+audiobooks
 awesome-lists
 books
 channels
 comics
 courses
 do
+downloads
 eat & drink
 feeds
 fonts
