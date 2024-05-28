@@ -5,6 +5,7 @@ set -euo pipefail
 nonarticle_tags () {
     cat <<END
 apps
+awesome-lists
 books
 channels
 comics
