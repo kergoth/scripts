@@ -40,18 +40,90 @@ webgames
 END
 }
 
-to_read=$(nonarticle_tags | grep -Ev '^ *$|^#' | sed -e 's#^#tag__not:#; s#$# AND #;' | xargs | sed -e 's# AND$##')
-to_do=$(nonarticle_tags | grep -Ev '^ *$|^#' | sed -e 's#^#tag:#; s#$# OR #;' | xargs | sed -e 's# OR$##')
+msg_color() {
+    local color=$1
+    shift
+    local msg=$1
+    shift
+    # shellcheck disable=SC2059
+    if [ -n "${NO_COLOR:-}" ] || { [ -z "${COLOR:-}" ] && ! [ -t 1 ]; }; then
+        printf "${msg}" "$@"
+        return
+    else
+        printf "\033[${color}m${msg}\033[0m" "$@"
+    fi
+}
 
-printf "🗞️ To Read: tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND %s )\n" "$to_read"
-printf "🛜 To Read Online: tag:\"to read online\" AND tag__not:\"online books\"\n"
-printf "⏱ Quick Reads: minutes__gt:1.9 AND minutes__lt:10 AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND %s ) )\n" "$to_read"
-printf "💻 Coding Articles: tag:coding AND (tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND %s ))\n" "$to_read"
-printf "☑️ To Do: tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( %s )\n" "$to_do"
-printf "☑️ 💻 Coding To Do: tag:coding AND tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( %s )\n" "$to_do"
-printf "🏷️ Untagged: has__not:tags\n"
+msg_blue() {
+    msg_color '34' "$@"
+}
+
+msg_green() {
+    msg_color '32' "$@"
+}
+
+msg_view() {
+    local name=$1
+    shift
+    msg_blue "%-24s\t" "$name"
+    local msg=$1
+    shift
+    msg_green "$msg\n" "$@"
+}
+
+reader_views() {
+    local to_read=$1
+    shift
+    local to_do=$1
+    shift
+    while IFS=$'\t' read -r name query; do
+        case "$name" in
+            \#*) continue ;;
+        esac
+        msg_view "$name" "$query"
+    done <<END
+⭐️ Shortlist	in:shortlist
+🗞️ To Read	tag:"to read" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:"to read online" AND ( $to_read ) )
+🛜 To Read Online	tag:"to read online" AND tag__not:"online books"
+📖 Web Fiction	tag:webfiction OR ( ( author:"Patreon" OR author:patreon.com ) AND ( title:"just shared" OR title:"on Patreon" OR title:"updated" ) ) AND title__not:"Jeph Jacques" AND title__not:Maher AND title__not:"Barely Balanced"
+⏱ Quick Read	minutes__gt:1.9 AND minutes__lt:10 AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND ( $to_read ) ) )
+💻 Coding Articles	tag:coding AND (tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND $to_read ))
+☑️ To Do	tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( $to_do )
+☑️ 💻 Coding To Do	tag:coding AND tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( $to_do )
+🎥 Videos	category:video OR domain:youtube.com OR url:/watch
+🏷️ Untagged	has__not:tags
 # If an article is tagged as "to read", but has an unknown length, then it likely *is* readable, just that the length is unknown. In such a case, it should be included in the "To Read" list, but not in the "Unknown Length" list.
-printf "🚨 Unknown Length: minutes:0 AND tag__not:\"to read\" AND ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND %s )\n" "$to_read"
+🚨 Unknown Length	minutes:0 AND tag__not:\"to read\" AND category__not:books AND tag__not:\"to read online\" AND ( $to_read )
 # Very short items are often a red flag, as they're often not actually an article, but potentially a product page or other similar case where Reader is unable to parse it into article text.
 #   Feed items often are short, so don't consider very short feed items as a red flag.
-printf "🚨 Very Quick Reads: minutes__gt:0 AND minutes__lt:2 AND category__not:rss AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND %s ) )\n" "$to_read"
+🚨 Very Quick Reads	minutes__gt:0 AND minutes__lt:2 AND category__not:rss AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND ( $to_read ) ) )
+END
+}
+
+
+to_read=$(nonarticle_tags | grep -Ev '^ *$|^#' | sed -e '/ /s#^\(.*\)$#tag__not:"\1"#; / /!s#^#tag__not:#; s#$# AND #;' | tr -d '\n' | sed -e 's# AND $##')
+to_do=$(nonarticle_tags | grep -Ev '^ *$|^#' | sed -e '/ /s#^\(.*\)$#tag:"\1"#; / /!s#^#tag:#; s#$# OR #;' | tr -d '\n' | sed -e 's# OR $##')
+
+if ! [ -t 1 ]; then
+    NO_COLOR=1
+else
+    COLOR=1
+fi
+reader_views "$to_read" "$to_do" #| column -t -s $'\t'
+
+# msg_view '⭐️ Shortlist' 'in:shortlist'
+# msg_view '🗞️ To Read' 'tag:"to read" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:"to read online" AND ( %s ) )' "$to_read"
+# msg_view '🛜 To Read Online' 'tag:"to read online" AND tag__not:"online books"'
+# msg_view '📖 Web Fiction' 'tag:webfiction OR ( ( author:"Patreon" OR author:patreon.com ) AND ( title:"just shared" OR title:"on Patreon" OR title:"updated" ) ) AND title__not:"Jeph Jacques" AND title__not:Maher AND title__not:"Barely Balanced"'
+# msg_view "⏱ Quick Read" "minutes__gt:1.9 AND minutes__lt:10 AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND ( %s ) ) )" "$to_read"
+
+# msg_view "💻 Coding Articles" "tag:coding AND (tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND has:tags AND tag__not:\"to read online\" AND %s ))" "$to_read"
+# msg_view "☑️ To Do" "tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( %s )" "$to_do"
+# msg_view "☑️ 💻 Coding To Do" "tag:coding AND tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( %s )" "$to_do"
+# msg_view '🎥 Videos' 'category:video OR domain:youtube.com OR url:/watch'
+# msg_view '🏷️ Untagged' 'has__not:tags'
+# # If an article is tagged as "to read", but has an unknown length, then it likely *is* readable, just that the length is unknown. In such a case, it should be included in the "To Read" list, but not in the "Unknown Length" list.
+# msg_view "🚨 Unknown Length" "minutes:0 AND tag__not:\"to read\" AND category__not:books AND tag__not:\"to read online\" AND ( %s )" "$to_read"
+# # Very short items are often a red flag, as they're often not actually an article, but potentially a product page or other similar case where Reader is unable to parse it into article text.
+# #   Feed items often are short, so don't consider very short feed items as a red flag.
+# msg_view "🚨 Very Quick Reads" "minutes__gt:0 AND minutes__lt:2 AND category__not:rss AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND ( %s ) ) )" "$to_read"
