@@ -87,9 +87,9 @@ reader_views() {
 ⭐️ Shortlist	in:shortlist
 🗞️ To Read	tag:"to read" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:"to read online" AND ( $to_read ) )
 🛜 To Read Online	tag:"to read online" AND tag__not:"online books"
+⏱ Quick Reads	minutes__gt:1.9 AND minutes__lt:10 AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND ( $to_read ) ) )
 📖 Web Fiction	tag:webfiction OR ( ( author:"Patreon" OR author:patreon.com ) AND ( title:"just shared" OR title:"on Patreon" OR title:"updated" ) ) AND title__not:"Jeph Jacques" AND title__not:Maher AND title__not:"Barely Balanced"
-⏱ Quick Read	minutes__gt:1.9 AND minutes__lt:10 AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND ( $to_read ) ) )
-💻 Coding Articles	tag:coding AND (tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND $to_read ))
+💻 Coding	tag:coding AND (tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND $to_read ))
 ☑️ To Do	tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( $to_do )
 ☑️ 💻 Coding To Do	tag:coding AND tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( $to_do )
 🎥 Videos	category:video OR domain:youtube.com OR url:/watch
