@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-nonarticle_tags () {
+nonarticle_tags() {
     cat <<END
 apps
 audiobooks
@@ -80,28 +80,29 @@ reader_views() {
     shift
     while IFS=$'\t' read -r name query; do
         case "$name" in
-            \#*) continue ;;
+        \#*) continue ;;
         esac
         msg_view "$name" "$query"
     done <<END
 ⭐️ Shortlist	in:shortlist
-🗞️ To Read	tag:"to read" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:"to read online" AND ( $to_read ) )
+🗞️ To Read	(tag:"to read" OR ( category:article OR category:rss OR category:email )) AND tag__not:"to read online" AND tag__not:"online books" AND tag__not:do
 🛜 To Read Online	tag:"to read online" AND tag__not:"online books"
-⏱ Quick Reads	minutes__gt:1.9 AND minutes__lt:10 AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND ( $to_read ) ) )
+🛜📚 Online Books	tag:"online books"
+⏱ Quick Reads	minutes__gt:1.9 AND minutes__lt:10 AND ( (tag:\"to read\" OR ( category:article OR category:rss OR category:email) AND tag__not:\"to read online\" AND tag__not:do ) )
 📖 Web Fiction	tag:webfiction OR ( ( author:"Patreon" OR author:patreon.com ) AND ( title:"just shared" OR title:"on Patreon" OR title:"updated" ) ) AND title__not:"Jeph Jacques" AND title__not:Maher AND title__not:"Barely Balanced"
-💻 Coding	tag:coding AND (tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND $to_read ))
-☑️ To Do	tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( $to_do )
-☑️ 💻 Coding To Do	tag:coding AND tag__not:\"to read\" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( $to_do )
+💻 Coding	tag:coding AND (tag:"to read" OR ( category:article OR category:rss OR category:email )) AND tag__not:"to read online" AND tag__not:do
+☑️ To Do	tag:do
+☑️ To Do (All)	tag__not:"to read" AND has:tags AND ( category:article OR category:rss OR category:email ) AND ( $to_do )
+☑️ 💻 Coding To Do	tag:coding AND tag__not:"to read" AND has:tags AND ( category:article OR category:rss OR category:email ) AND tag:do
 🎥 Videos	category:video OR domain:youtube.com OR url:/watch
 🏷️ Untagged	has__not:tags
 # If an article is tagged as "to read", but has an unknown length, then it likely *is* readable, just that the length is unknown. In such a case, it should be included in the "To Read" list, but not in the "Unknown Length" list.
-🚨 Unknown Length	minutes:0 AND tag__not:\"to read\" AND category__not:books AND tag__not:\"to read online\" AND ( $to_read )
+🚨 Unknown Length	minutes:0 AND tag__not:"to read" AND category__not:books AND tag__not:"to read online" AND tag__not:do
 # Very short items are often a red flag, as they're often not actually an article, but potentially a product page or other similar case where Reader is unable to parse it into article text.
 #   Feed items often are short, so don't consider very short feed items as a red flag.
-🚨 Very Quick Reads	minutes__gt:0 AND minutes__lt:2 AND category__not:rss AND ( tag:\"to read\" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND ( $to_read ) ) )
+🚨 Very Quick Reads	minutes__gt:0 AND minutes__lt:2 AND category__not:rss AND ( tag:"to read" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND tag__not:do ) )
 END
 }
-
 
 to_read=$(nonarticle_tags | grep -Ev '^ *$|^#' | sed -e '/ /s#^\(.*\)$#tag__not:"\1"#; / /!s#^#tag__not:#; s#$# AND #;' | tr -d '\n' | sed -e 's# AND $##')
 to_do=$(nonarticle_tags | grep -Ev '^ *$|^#' | sed -e '/ /s#^\(.*\)$#tag:"\1"#; / /!s#^#tag:#; s#$# OR #;' | tr -d '\n' | sed -e 's# OR $##')
