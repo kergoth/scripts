@@ -101,7 +101,8 @@ reader_views() {
 🚨 Unknown Length	minutes:0 AND tag__not:"to read" AND category__not:books AND tag__not:"to read online" AND tag__not:do
 # Very short items are often a red flag, as they're often not actually an article, but potentially a product page or other similar case where Reader is unable to parse it into article text.
 #   Feed items often are short, so don't consider very short feed items as a red flag.
-🚨 Very Quick Reads	minutes__gt:0 AND minutes__lt:2 AND category__not:rss AND ( tag:"to read" OR ( ( category:article OR category:rss OR category:email ) AND tag__not:\"to read online\" AND tag__not:do ) )
+🚨 Super Quick Reads	minutes__gt:0 AND minutes__lt:1 AND ( tag:"to read" OR category:article ) AND tag__not:"to read online" AND tag__not:do
+🚨 Very Quick Reads	minutes__gt:0 AND minutes__lt:2 AND ( tag:"to read" OR category:article ) AND tag__not:"to read online" AND tag__not:do
 END
 }
 
