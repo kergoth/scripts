@@ -1,0 +1,62 @@
+#!/bin/bash
+
+search_venvs() {
+  local search_path=$1
+  if [ -d "$search_path" ]; then
+    find "$search_path" -type d -name 'bin' -exec test -e '{}/activate' \; -print 2>/dev/null | sed 's|/bin||'
+  fi
+}
+
+paths=(
+  "$PWD"
+  "$HOME/.local/share/virtualenvs"
+  "$HOME/Library/Caches/pypoetry/virtualenvs"
+  "$HOME/.local/share/pdm/venvs"
+  "$HOME/.pyenv/versions"
+  "$HOME/.virtualenvs"
+  "$HOME/.conda/envs"
+)
+
+
+if [ -n "$CONDA_PREFIX" ]; then
+  paths+=("$CONDA_PREFIX")
+fi
+
+venv_paths=()
+for path in "${paths[@]}"; do
+  while IFS= read -r line; do
+    venv_paths+=("$line")
+  done < <(search_venvs "$path")
+done
+
+
+if [ ${#venv_paths[@]} -gt 0 ]; then
+  selected_venv=$(printf '%s\n' "${venv_paths[@]}" | fzf --prompt="Select a virtual environment: ")
+  if [ -n "$selected_venv" ]; then
+    echo "You selected: $selected_venv"
+
+    venv_name=$(basename "$selected_venv")
+    venv_path=$(dirname "$selected_venv")
+
+    if [ "$venv_path" = "$PWD" ]; then
+        venv_path="."
+    fi
+
+    cat <<EOL > pyrightconfig.json
+{
+  "venvPath": "$venv_path",
+  "venv": "$venv_name"
+}
+EOL
+
+    if [ -f "pyrightconfig.json" ]; then
+      echo "pyrightconfig.json updated with the selected environment."
+    else
+      echo "pyrightconfig.json created with the selected environment."
+    fi
+  else
+    echo "No virtual environment selected."
+  fi
+else
+  echo "No virtual environments found."
+fi
