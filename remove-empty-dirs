@@ -17,7 +17,7 @@ if [ $# -eq 0 ]; then
     set -- .
 fi
 
-find "$@" \( \( -name .git -o -name .repo \) -a -prune \) -o \( \( \( -type f -name .DS_Store \) -o \( -type f -a -empty -a -not -name .placeholder -a -not -name .gitkeep \) \) -a -print0 \) \
+find "$@" \( \( -name .git -o -name .repo \) -a -prune \) -o \( \( \( -type f -name .DS_Store \) -o \( -type f -a -empty -a -not -name .placeholder -a -not -name .gitkeep -not -name __init__.py \) \) -a -print0 \) \
     | xargs -n 1 -0 ${dry_run:+echo }rm -fv
 find "$@" \( -type d -name @eaDir \) -print0 \
     | xargs -n 1 -0 ${dry_run:+echo }rm -rfv
