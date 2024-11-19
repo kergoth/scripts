@@ -13,6 +13,7 @@ Options:
   -f DATE_FMT Use DATE_FMT as the output format for the date.
               Default is "%Y-%m-%d %H:%M".
   -b          Use birth date instead of modification date.
+  -A          Use added date instead of modification date.
   -h          Show this help message.
 EOF
     exit 2
@@ -21,7 +22,8 @@ EOF
 reverse=
 date_fmt="%Y-%m-%d %H:%M"
 birth_date=0
-while getopts rf:bh opt; do
+added_date=0
+while getopts rf:bAh opt; do
     case "$opt" in
     r)
         reverse=1
@@ -31,6 +33,9 @@ while getopts rf:bh opt; do
         ;;
     b)
         birth_date=1
+        ;;
+    A)
+        added_date=1
         ;;
     \? | h)
         usage
@@ -49,8 +54,25 @@ darwin*)
         echo >&2 "Error: -b is not supported for non-macOS systems"
         exit 1
     fi
+    if [ $added_date -eq 1 ]; then
+        echo >&2 "Error: -A is not supported for non-macOS systems"
+        exit 1
+    fi
     ;;
 esac
+
+find_added() {
+    find "$@" |
+        while read -r fn; do
+            added=$(/usr/bin/mdls -name kMDItemDateAdded -raw "$fn" 2>/dev/null || :)
+            if [ -n "$added" ] && [ "$added" != "(null)" ]; then
+                added=$(/bin/date -j -f "%Y-%m-%d %H:%M:%S" "${added% *}" "+%s")
+            else
+                added=$(/usr/bin/stat -f "%b%t%N" "$fn")
+            fi
+            printf '%s\t%s\n' "$added" "$fn"
+        done
+}
 
 if [ $# -eq 0 ]; then
     set -- .
@@ -58,13 +80,17 @@ fi
 set -- "$@" \( -not -name .DS_Store -a -not -name .\* -a -not -wholename \*/.\* -a -not -wholename \*/@eaDir/\* \) -a
 
 if [ $MACOS -eq 1 ]; then
-    if [ $birth_date -eq 1 ]; then
-        statfmt="%b%t%N"
+    if [ $added_date -eq 1 ]; then
+        find_added "$@"
     else
-        statfmt="%m%t%N"
-    fi
+        if [ $birth_date -eq 1 ]; then
+            statfmt="%b%t%N"
+        else
+            statfmt="%m%t%N"
+        fi
 
-    find "$@" -type f -exec /usr/bin/stat -f "$statfmt" \{\} \+ |
+        find "$@" -type f -exec /usr/bin/stat -f "$statfmt" \{\} \+
+    fi |
         sort ${reverse:+-r} -n |
         if [ "$date_fmt" = "%s" ]; then
             cat
