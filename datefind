@@ -3,7 +3,18 @@
 set -euo pipefail
 
 usage() {
-    echo >&2 "${0##*/} [-r] [--] [FIND_ARGS..]"
+    cat >&2 <<EOF
+Usage: ${0##*/} [-r] [-f DATE_FMT] [-b] [--] [FIND_ARGS..]
+
+List files by date.
+
+Options:
+  -r          Reverse the sort order.
+  -f DATE_FMT Use DATE_FMT as the output format for the date.
+              Default is "%Y-%m-%d %H:%M".
+  -b          Use birth date instead of modification date.
+  -h          Show this help message.
+EOF
     exit 2
 }
 
