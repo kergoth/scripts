@@ -8,7 +8,7 @@ usage () {
     echo >&2 "Options:"
     echo >&2
     echo >&2 "  UPSTREAM_BRANCH     Specify the base upstream branches where the"
-    echo >&2 "                      changes are merged, defaults to origin/master."
+    echo >&2 "                      changes are merged, defaults to origin/main."
     echo >&2 "  -r REMOTE   Prune branches of the specified remote, not local."
     echo >&2 "  -R          Prune the branches in the repo repo, not just the tracking branches."
     echo >&2 "  -l          List refs rather than removing them."
@@ -56,7 +56,7 @@ if [ -n "$corresponding" ]; then
 elif [ $# -gt 0 ]; then
     set -- $(echo "$@" | tr ' ' '\n' | sed 's/^/--merged=/')
 else
-    set -- --merged=origin/master
+    set -- --merged=origin/main
 fi
 
 if [ "$ref_prefix" != "refs/heads" ] && [ $prune_remote_repo -eq 1 ]; then

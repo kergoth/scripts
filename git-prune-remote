@@ -11,7 +11,7 @@ usage() {
     echo >&2 "  REMOTE                Prune refs of the specified remote, defaults to $USER."
     echo >&2 "  -o ORIGIN_REMOTE      Prune branches relative to the specified remote, not origin."
     echo >&2 "  -u UPSTREAM_BRANCHES  Specify the base upstream branches where the changes are merged,"
-    echo >&2 "                        defaults to master. Comma-separated."
+    echo >&2 "                        defaults to main. Comma-separated."
     echo >&2 "  -R                    Remote. Remove upstream branches, not just tracking branches."
     echo >&2 "  -L                    Local only. Remove tracking branches, not upstream branches. (Default)"
     echo >&2 "  -n                    Dry-run"
@@ -22,7 +22,7 @@ process_arguments() {
     origin=origin
     dry_run=0
     local_only=1
-    upstream_branches=master
+    upstream_branches=main
     while getopts o:u:LRnh opt; do
         case "$opt" in
             o)
