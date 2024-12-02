@@ -213,7 +213,7 @@ update_dates() {
             printf "> "
             printcmd setfiledate -o ${dry_run:+-n} "$@" "$filepath"
         fi
-        setfiledate -o ${dry_run:+-n} "$@" "$filepath" || {
+        setfiledate ${only_older:+o} ${dry_run:+-n} "$@" "$filepath" || {
             local fret=$?
             if [ $continue -eq 0 ]; then
                 return $fret
@@ -406,10 +406,11 @@ esac
 
 set_create=
 set_modify=
+only_older=1
 dry_run=
 continue=0
 verbose=0
-while getopts cCmMnkvh opt; do
+while getopts cCmMOnkvh opt; do
     case "$opt" in
     c)
         if [ $IS_MAC -eq 0 ]; then
@@ -426,6 +427,9 @@ while getopts cCmMnkvh opt; do
         ;;
     M)
         set_modify=0
+        ;;
+    O)
+        only_older=
         ;;
     n)
         dry_run=1
