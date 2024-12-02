@@ -371,7 +371,7 @@ lsardate() {
             return 1
         fi
     fi
-    jq '[.lsarContents[].XADLastModificationDate | strptime("%Y-%m-%d %H:%M:%S") | strftime("%s") | tonumber] | sort | reverse | .[0]' <"$tmpfile" || return 1
+    jq '[.lsarContents[] | select(.XADIsDirectory != true) | .XADLastModificationDate | strptime("%Y-%m-%d %H:%M:%S") | strftime("%s") | tonumber] | sort | reverse | .[0]' <"$tmpfile" || return 1
 }
 
 msg_verbose() {
