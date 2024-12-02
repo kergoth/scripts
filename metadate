@@ -12,15 +12,6 @@
 # - Archives supported by `lsar`, using the newest dates of its contents
 # - Files with additional metadata available to `exiftool`, such as JPG
 #
-# Usage: metadate [-c] [-m] [-n] [-k] [-v] PATH [PATH..]
-#        -c  Set creation date. (Default enabled on macOS, disabled elsewhere)
-#        -C  Do not set creation date.
-#        -m  Set modification date. (Default disabled on macOS, enabled elsewhere)
-#        -M  Do not set modification date.
-#        -n  Dry run, do not actually change file dates
-#        -k  Keep going on error
-#        -v  Verbose, can be specified multiple times
-#
 # Note: We don't consider a failure to get a date from exiftool an actual error, as it's
 #       possible for a file to not have a date, and we don't want to error out on that.
 
@@ -30,7 +21,17 @@ scriptdir=$(cd "$(dirname "$0")" && pwd -P)
 PATH="$scriptdir:$PATH"
 
 usage() {
-    echo >&2 "${0##*/} [-c] [-C] [-m] [-M] [-n] [-k] [-v] PATH [PATH..]"
+    cat <<EOF >&2
+Usage: ${0##*/} [-c] [-m] [-n] [-k] [-v] PATH [PATH..]
+       -c  Set creation date. (Default enabled on macOS, disabled elsewhere)
+       -C  Do not set creation date.
+       -m  Set modification date. (Default disabled on macOS, enabled elsewhere)
+       -M  Do not set modification date.
+       -O  Set the date, even if the current date is older. (Default is to skip if older)
+       -n  Dry run, do not actually change file dates
+       -k  Keep going on error
+       -v  Verbose, can be specified multiple times
+EOF
     exit 2
 }
 
