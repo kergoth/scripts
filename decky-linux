@@ -45,13 +45,14 @@ run() {
     fi
 }
 
+
 verbose=1
 
 if [ -d .git ]; then
-    run git clean -fdx || msg "Warning: git clean failed, continuing"
+    run git clean -qfdx || msg "warning: git clean failed, continuing"
 fi
 
-if limactl list --quiet docker &>/dev/null; then
+if ! limactl list --quiet docker &>/dev/null; then
     PATH="$HOME/Projects/lima/lima-0.17.2-Darwin-x86_64/bin:$PATH"
     run limactl start docker || die "failed to start docker VM"
 fi
@@ -64,9 +65,9 @@ if ! [ -x "$binary" ]; then
 fi
 
 run limactl shell docker "$binary" "$@"
+run git clean -fqdx -e out/
 if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
     builddir="${3:-.}"
-    # run limactl shell docker bash -x -c "wget https://github.com/SteamDeckHomebrew/cli/releases/download/0.0.4/decky-linux-x86_64 && mv decky-linux-x86_64 decky && chmod +x decky && ./decky plugin build .; exit $?"
     output=$(find "$builddir/out" -mindepth 1 -maxdepth 1 -type f | head -n 1)
     if [ -n "$output" ]; then
         msg "Decky build complete: %s" "$output"
