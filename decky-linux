@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf "$fmt\n" "$@" >&2
+}
+
+msg_verbose() {
+    if [ "${verbose:-0}" -ge "1" ]; then
+        msg "$@"
+    fi
+}
+
+msg_debug() {
+    if [ "${verbose:-0}" -ge "2" ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg "$@"
+    exit 1
+}
+
+has() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+printcmd() {
+    python3 -c 'import subprocess,sys; print(subprocess.list2cmdline(sys.argv[1:]))' "$@"
+}
+
+run() {
+    if [ "${verbose:-0}" -gt 0 ]; then
+        printf '❯ %s\n' "$(printcmd "$@")" >&2
+    fi
+    if [ -z "${dry_run:-}" ]; then
+        "$@"
+    fi
+}
+
+verbose=1
+
+if [ -d .git ]; then
+    run git clean -fdx || msg "Warning: git clean failed, continuing"
+fi
+
+if limactl list --quiet docker &>/dev/null; then
+    PATH="$HOME/Projects/lima/lima-0.17.2-Darwin-x86_64/bin:$PATH"
+    run limactl start docker || die "failed to start docker VM"
+fi
+
+binary="${XDG_DATA_HOME:-$HOME/.local}/bin/decky-linux-binary"
+if ! [ -x "$binary" ]; then
+    mkdir -p "$(dirname "$binary")"
+    curl -fsSL --output "$binary" https://github.com/SteamDeckHomebrew/cli/releases/download/0.0.4/decky-linux-x86_64
+    chmod +x "$binary"
+fi
+
+run limactl shell docker "$binary" "$@"
+if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
+    builddir="${3:-.}"
+    # run limactl shell docker bash -x -c "wget https://github.com/SteamDeckHomebrew/cli/releases/download/0.0.4/decky-linux-x86_64 && mv decky-linux-x86_64 decky && chmod +x decky && ./decky plugin build .; exit $?"
+    output=$(find "$builddir/out" -mindepth 1 -maxdepth 1 -type f | head -n 1)
+    if [ -n "$output" ]; then
+        msg "Decky build complete: %s" "$output"
+    else
+        die "Error: Decky build complete, but nothing found in %s/out/" "$builddir"
+    fi
+fi
