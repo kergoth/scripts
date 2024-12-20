@@ -52,7 +52,7 @@ if [ -d .git ]; then
     run git clean -qfdx || msg "warning: git clean failed, continuing"
 fi
 
-if ! limactl list --quiet docker &>/dev/null; then
+if ! limactl list --quiet docker &>/dev/null || limactl list --all-fields docker | tail -n +2 | awk '{print $2}' | grep -q Stopped; then
     PATH="$HOME/Projects/lima/lima-0.17.2-Darwin-x86_64/bin:$PATH"
     run limactl start docker || die "failed to start docker VM"
 fi
