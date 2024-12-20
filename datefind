@@ -81,7 +81,7 @@ set -- "$@" \( -not -name .DS_Store -a -not -name .\* -a -not -wholename \*/.\* 
 
 if [ $MACOS -eq 1 ]; then
     if [ $added_date -eq 1 ]; then
-        find_added "$@"
+        find_added "$@" -print
     else
         if [ $birth_date -eq 1 ]; then
             statfmt="%b%t%N"
