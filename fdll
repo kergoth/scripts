@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+set -- "$@" -X eza -lg
+if [ -t 1 ]; then
+    set -- "$@" --color=always
+fi
+fd "$@"
