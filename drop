@@ -7,6 +7,8 @@ case "$(uname -r)" in
     *)
         if command -v trash >/dev/null 2>&1; then
             alias remove="trash -v"
+        elif command -v gio >/dev/null 2>&1; then
+            alias remove="gio trash"
         else
             alias remove=bgrm
         fi
