@@ -48,10 +48,6 @@ run() {
 
 verbose=1
 
-if [ -d .git ]; then
-    run git clean -qfdx || msg "warning: git clean failed, continuing"
-fi
-
 if ! limactl list --quiet docker &>/dev/null || limactl list --all-fields docker | tail -n +2 | awk '{print $2}' | grep -q Stopped; then
     PATH="$HOME/Projects/lima/lima-0.17.2-Darwin-x86_64/bin:$PATH"
     run limactl start docker || die "failed to start docker VM"
@@ -64,6 +60,10 @@ if ! [ -x "$binary" ]; then
     chmod +x "$binary"
 fi
 
+if [ -d .git ]; then
+    run git clean -qfdx || msg "warning: git clean failed, continuing"
+fi
+run limactl shell docker bash -c "rm -rf /tmp/decky /tmp/out*" || msg "warning: clean up of /tmp files failed, continuing"
 run limactl shell docker "$binary" "$@"
 run git clean -fqdx -e out/
 if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
