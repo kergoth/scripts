@@ -22,7 +22,7 @@ process_arguments() {
     origin=origin
     dry_run=0
     local_only=1
-    upstream_branches=main
+    upstream_branches=main,master
     while getopts o:u:LRnh opt; do
         case "$opt" in
             o)
