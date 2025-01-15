@@ -70,8 +70,8 @@ if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
     set -- plugin build --build-as-root --tmp-output-path "$PWD/tmp" --output-path ./out "$@"
 fi
 run limactl shell docker "$binary" "$@"
-run git clean -fqdx -e out/
-if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
+run git clean -fqdx -e ./out/
+if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ] && [ -d ./out ]; then
     output=$(find ./out -mindepth 1 -maxdepth 1 -type f | head -n 1)
     if [ -n "$output" ]; then
         msg "Decky build complete: %s" "$output"
