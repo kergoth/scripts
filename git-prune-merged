@@ -54,7 +54,11 @@ if [ -n "$corresponding" ]; then
     fi
     set -- $corresponding
 elif [ $# -gt 0 ]; then
-    set -- $(echo "$@" | tr ' ' '\n' | sed 's/^/--merged=/')
+    for ref; do
+        if git rev-parse --quiet --verify "$ref" >/dev/null; then
+            set -- --merged="$ref"
+        fi
+    done
 else
     set -- --merged=origin/main
 fi
