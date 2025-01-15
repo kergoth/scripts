@@ -59,4 +59,4 @@ github-list-forks ${all:+-a} "$@" | while read -r repo; do
     fi
     git remote set-url "$remote" "$url"
 done
-git parallel-fetch
+git fetch --multiple --all --jobs=0
