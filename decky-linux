@@ -64,7 +64,11 @@ fi
 if [ -d .git ]; then
     run git clean -qfdx || msg "warning: git clean failed, continuing"
 fi
-run limactl shell docker bash -c "rm -rf /tmp/decky /tmp/out*" || msg "warning: clean up of /tmp files failed, continuing"
+if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
+    shift 2
+    mkdir -p tmp
+    set -- plugin build --tmp-output-path "$PWD/tmp" --output-path ./out "$@"
+fi
 run limactl shell docker "$binary" "$@"
 run git clean -fqdx -e out/
 if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
