@@ -67,7 +67,7 @@ fi
 if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
     shift 2
     mkdir -p tmp
-    set -- plugin build --tmp-output-path "$PWD/tmp" --output-path ./out "$@"
+    set -- plugin build --build-as-root --tmp-output-path "$PWD/tmp" --output-path ./out "$@"
 fi
 run limactl shell docker "$binary" "$@"
 run git clean -fqdx -e out/
