@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ -n "${__CFBundleIdentifier}" ]; then
+    app=$(mdfind "kMDItemCFBundleIdentifier == '${__CFBundleIdentifier}'" | head -n 1)
+else
+    app=$(mdfind "kMDItemCFBundleIdentifier == 'dev.zed.Zed'" | head -n 1)
+fi
+if [ -n "$app" ]; then
+    exec "$app/Contents/MacOS/cli" "$@"
+else
+    echo "Error: Zed application not found" >&2
+    exit 1
+fi
