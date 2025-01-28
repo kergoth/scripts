@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+if echo "${OSTYPE:-}" | grep -q "^darwin"; then
+    if command -v colima &>/dev/null && ! command -v distrobox &>/dev/null; then
+        distrobox () {
+            colima ssh -- distrobox "$@"
+        }
+    fi
+
+    # We don't want to share the home directory on darwin, as any binaries installed there
+    # will be for the wrong operating system.
+    set -- --home "/home/$USER.linux" "$@"
+fi
+
+set -x
+distrobox create --pre-init-hooks "apk add opendoas && (grep -q 'permit $USER' /etc/doas.conf || echo 'permit $USER' >> /etc/doas.conf)" --image "$@" docker.io/chimeralinux/chimera
