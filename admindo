@@ -1,0 +1,13 @@
+#!/bin/sh
+# Run a command as my admin user with 'su'
+
+set -eu
+
+OSX_ADMIN_LOGNAME="${OSX_ADMIN_LOGNAME-archet}"
+if [ -n "$OSX_ADMIN_LOGNAME" ]; then
+    if [ "$LOGNAME" = "$OSX_ADMIN_LOGNAME" ]; then
+        command "$@"
+    else
+        surun "$OSX_ADMIN_LOGNAME" "$@"
+    fi
+fi

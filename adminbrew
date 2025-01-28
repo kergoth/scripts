@@ -7,12 +7,5 @@ set -eu
 # operations as an admin user while working as a non-admin user causes
 # problems if you use brew to install zsh, due to the differing ownership of
 # the paths in `fpath`.
-OSX_ADMIN_LOGNAME="${OSX_ADMIN_LOGNAME-archet}"
-if [ -n "$OSX_ADMIN_LOGNAME" ]; then
-    if [ "$LOGNAME" = "$OSX_ADMIN_LOGNAME" ]; then
-        brew "$@"
-    else
-        _brew="${ADMIN_HOMEBREW_PREFIX:-${HOMEBREW_PREFIX:-$(command brew --prefix)}}/bin/brew"
-        surun "$OSX_ADMIN_LOGNAME" "$_brew" "$@"
-    fi
-fi
+_brew="${ADMIN_HOMEBREW_PREFIX:-${HOMEBREW_PREFIX:-$(command brew --prefix)}}/bin/brew"
+admindo "$_brew" "$@"
