@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Run a command as a different user using 'su', rather than 'sudo'
+
+set -euo pipefail
+
+username="$1"
+shift
+
+args="$(quote-args "$@")"
+echo >&2 "Running '$args' as $username, input $username's password"
+su - "$username" -c "cd $(quote-args "$PWD") && $args"

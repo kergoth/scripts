@@ -13,8 +13,6 @@ if [ -n "$OSX_ADMIN_LOGNAME" ]; then
         brew "$@"
     else
         _brew="${ADMIN_HOMEBREW_PREFIX:-${HOMEBREW_PREFIX:-$(command brew --prefix)}}/bin/brew"
-        _args="$(quote-args "$@")"
-        echo >&2 "Running '$_brew $_args' as $OSX_ADMIN_LOGNAME, input $OSX_ADMIN_LOGNAME's password"
-        su - "$OSX_ADMIN_LOGNAME" -c "$_brew $_args"
+        surun "$OSX_ADMIN_LOGNAME" "$_brew" "$@"
     fi
 fi
