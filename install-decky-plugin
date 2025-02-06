@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+
+is_color_enabled() {
+    local mode="$1"
+
+    if [[ -z "$NO_COLOR" ]]; then
+        case "$mode" in
+            always)
+                return 0
+                ;;
+            auto)
+                if [[ -t 1 ]]; then
+                    return 0
+                fi
+                ;;
+        esac
+    fi
+    return 1
+}
+
+print_msg() {
+    local color="$1"
+    local msg="$2"
+    local reset='\033[0m'
+
+    if ! is_color_enabled "$color_output"; then
+        color=""
+        reset=""
+    fi
+
+    printf "%b%s%b\n" "$color" "$msg" "$reset" >&2
+}
+
+print_verbose() {
+    local msg="$1"
+    if [[ $verbosity -ge 1 ]]; then
+        printf "%s\n" "$msg" >&2
+    fi
+}
+
+print_debug() {
+    local msg="$1"
+    if [[ $verbosity -ge 2 ]]; then
+        printf "%s\n" "$msg" >&2
+    fi
+}
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+usage() {
+    local bold="$BOLD"
+    local green="$GREEN"
+    local red="$RED"
+    local reset="$RESET"
+
+    if ! is_color_enabled "$color_output"; then
+        bold=""
+        green=""
+        red=""
+        reset=""
+    fi
+
+    printf "%b" "Usage: ${bold}$0${reset} ${red}[OPTIONS]${reset} <plugin_file>...
+
+Install Decky plugins from specified plugin archives.
+
+Options:
+
+  ${red}-d${reset} PATH  ${green}Specify the path to the Decky Loader installation (default: \$HOME/homebrew)${reset}
+  ${red}-n${reset} NAME  ${green}Specify the plugin name (only valid if one plugin file is provided)${reset}
+  ${red}-v${reset}       ${green}Increase verbosity (can be used multiple times)${reset}
+  ${red}-q${reset}       ${green}Decrease verbosity (can be used multiple times)${reset}
+  ${red}-h${reset}       ${green}Display this help message${reset}
+  ${red}-c${reset} WHEN  ${green}Control color output (auto, always, never)${reset}
+
+Examples:
+
+  - ${green}Install a single plugin with verbosity enabled${reset}
+    ${bold}$0${reset} ${red}-d${reset} /path/to/decky_loader ${red}-n${reset} MyPlugin ${red}-v${reset} /path/to/plugin.zip
+
+  - ${green}Install multiple plugins with quiet mode enabled${reset}
+    ${bold}$0${reset} ${red}-d${reset} /path/to/decky_loader ${red}-q${reset} /path/to/plugin1.zip /path/to/plugin2.zip
+"
+}
+
+determine_plugin_name() {
+    local plugin_file="$1"
+    local plugin_name
+
+    case "$plugin_file" in
+    *.7z)
+        plugin_name=$(7z l "$plugin_file" | awk '/^D/ {print $6; exit}')
+        ;;
+    *.zip)
+        plugin_name=$(unzip -l "$plugin_file" | awk '/\/$/ {print $4; exit}')
+        ;;
+    *.xz)
+        plugin_name=$(tar -tf "$plugin_file" | awk -F/ '{print $1; exit}')
+        ;;
+    *)
+        print_msg "$RED" "Error: Unknown archive format for determining plugin name"
+        return 1
+        ;;
+    esac
+
+    if [[ -z "$plugin_name" ]]; then
+        print_msg "$RED" "Error: Failed to list contents of $plugin_file"
+        return 1
+    fi
+
+    echo "$plugin_name"
+}
+
+install_decky_plugin() {
+    local plugin_file="$1"
+    local decky_loader_path="$2"
+    local plugin_name="$3"
+
+    local plugin_dir="$decky_loader_path/plugins/$plugin_name"
+    local tmp_plugin_dir="$tmpdir/$plugin_name"
+
+    if [[ -d "$plugin_dir" ]]; then
+        print_msg "$YELLOW" "Plugin $plugin_name is already installed."
+        return 0
+    fi
+
+    print_verbose "$BLUE Installing $plugin_name plugin...$RESET"
+    local plugins_dir
+    plugins_dir=$(dirname "$plugin_dir")
+
+    trap 'cleanup' EXIT INT TERM
+    if [[ -d "$plugins_dir" ]]; then
+        chmod +w "$plugins_dir"
+    fi
+
+    mkdir -p "$tmp_plugin_dir"
+    {
+        case "$plugin_file" in
+        *.7z)
+            if ! command -v 7z &> /dev/null; then
+                print_msg "$RED" "Error: 7z command not found. Please install p7zip."
+                return 1
+            fi
+            7z x -o"$tmp_plugin_dir" "$plugin_file"
+            ;;
+        *.zip)
+            if ! command -v unzip &> /dev/null; then
+                print_msg "$RED" "Error: unzip command not found. Please install unzip."
+                return 1
+            fi
+            unzip -d "$tmp_plugin_dir" "$plugin_file"
+            ;;
+        *.xz)
+            if ! command -v tar &> /dev/null; then
+                print_msg "$RED" "Error: tar command not found. Please install tar."
+                return 1
+            fi
+            tar -xJf "$plugin_file" -C "$tmp_plugin_dir"
+            ;;
+        *)
+            print_msg "$RED" "Error: Unknown archive format for $plugin_name plugin"
+            return 1
+            ;;
+        esac
+    } | if [[ $verbosity -lt 1 ]]; then
+        cat >/dev/null
+    else
+        cat
+    fi
+
+    if [[ $? -ne 0 ]]; then
+        print_msg "$RED" "Error: Failed to unpack $plugin_file"
+        rm -rf "$tmp_plugin_dir"
+        return 1
+    fi
+
+    if [[ -d "$tmp_plugin_dir" ]]; then
+        if [[ "$(find "$tmp_plugin_dir" -mindepth 1 -maxdepth 1 -not -name .DS_Store | wc -l | xargs)" = 1 ]]; then
+            local single_dir
+            single_dir=$(find "$tmp_plugin_dir" -mindepth 1 -maxdepth 1 -type d)
+            if [[ -d "$single_dir" ]]; then
+                find "$single_dir" -mindepth 1 -maxdepth 1 -print0 | xargs -0 -I"{}" mv "{}" "$tmp_plugin_dir/"
+                rmdir "$single_dir"
+            fi
+        fi
+        mv "$tmp_plugin_dir" "$plugin_dir"
+        chmod -R -w "$plugin_dir"
+        chmod -w "$plugins_dir"
+        trap 'rm -rf "$tmpdir"' EXIT INT TERM
+
+        print_verbose "$GREEN Successfully installed $plugin_name plugin.$RESET"
+        return 0
+    else
+        chmod -w "$plugins_dir"
+        trap 'rm -rf "$tmpdir"' EXIT INT TERM
+        print_msg "$RED" "Error: Failed to install $plugin_name plugin."
+        return 1
+    fi
+}
+
+cleanup() {
+    rm -rf "$tmpdir"
+    chmod -w "$plugins_dir"
+}
+
+decky_loader_path="$HOME/homebrew"
+plugin_name=""
+verbosity=1
+color_output="auto"
+
+while getopts ":d:n:vqhc:" opt; do
+    case ${opt} in
+        d )
+            decky_loader_path="$OPTARG"
+            ;;
+        n )
+            plugin_name="$OPTARG"
+            ;;
+        v )
+            ((verbosity++))
+            ;;
+        q )
+            ((verbosity--))
+            ;;
+        h )
+            usage
+            exit 0
+            ;;
+        c )
+            case "$OPTARG" in
+                auto|always|never)
+                    color_output="$OPTARG"
+                    ;;
+                *)
+                    print_msg "$RED" "Invalid value for -c: $OPTARG"
+                    usage
+                    exit 1
+                    ;;
+            esac
+            ;;
+        \? )
+            print_msg "$RED" "Invalid option: -$OPTARG"
+            usage
+            exit 1
+            ;;
+        : )
+            print_msg "$RED" "Option -$OPTARG requires an argument."
+            usage
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND -1))
+
+if [[ $# -lt 1 ]]; then
+    print_msg "$RED" "Error: Invalid number of arguments."
+    usage
+    exit 1
+fi
+
+if [[ -n "$plugin_name" && $# -gt 1 ]]; then
+    print_msg "$RED" "Error: Plugin name can only be specified if one plugin file is provided."
+    usage
+    exit 1
+fi
+
+tmpdir=$(mktemp -d -t "${0##*/}.XXXXXX")
+trap 'cleanup' EXIT INT TERM
+
+success_count=0
+fail_count=0
+
+for plugin_file in "$@"; do
+    if [[ ! -f "$plugin_file" ]]; then
+        print_msg "$RED" "Error: Plugin file $plugin_file does not exist."
+        ((fail_count++))
+        continue
+    fi
+
+    if [[ -z "$plugin_name" ]]; then
+        plugin_name=$(determine_plugin_name "$plugin_file")
+        if [[ -z "$plugin_name" ]]; then
+            print_msg "$RED" "Error: Failed to determine plugin name from archive contents for $plugin_file."
+            ((fail_count++))
+            continue
+        fi
+    fi
+
+    if install_decky_plugin "$plugin_file" "$decky_loader_path" "$plugin_name"; then
+        ((success_count++))
+    else
+        ((fail_count++))
+    fi
+done
+
+if [[ $# -gt 1 && $verbosity -gt 0 ]]; then
+    print_msg "$BLUE" "Installation Summary:"
+    print_msg "$GREEN" "Successful installations: $success_count"
+    print_msg "$RED" "Failed installations: $fail_count"
+fi
+
+if [[ $fail_count -gt 0 ]]; then
+    exit 1
+else
+    exit 0
+fi
