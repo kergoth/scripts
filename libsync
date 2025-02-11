@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+#
+# librsync - a wrapper around rsync with support for remote archive extraction
+#
+# Usage: librsync [options] SRCPATH.. DESTPATH [-- rsync_options..]
+#
+# Wrap the sync of the source paths to the destination path. The paths may be an ssh destination or a local filesystem path.
+# SRCPATH may each be a regular file or a directory. If uncompress is set, and SRCPATH is a compressed file rather than a source directory, copy it to the destination and unpack it there, placing its files in the DESTPATH folder.
+#
+# Options:
+#     -H          Hard link files in a local file copy, rather than copying with rsync, if DESTPATH is local
+#     -u          Uncompress compressed source files to the destination path
+#     -U          Force unpacking of compressed source files to the destination path, even if they're older than the .unpacked file
+#     -c          Hoist the contents of a single-directory compressed archive to the destination path, rather than creating a subdirectory
+#     -s          Use a stamp file to avoid re-unpacking compressed files that are older than the stamp file
+#     -w          Apply wildcard expansion of source paths
+#     -n          Dry run, don't actually do anything
+#     -v          Increase verbosity, can be specified multiple times
+#     -q          Decrease verbosity, can be specified multiple times
+#     -h          Show this help message
+
+set -euo pipefail
+
+tmpdir=$(mktemp -d)
+# Clean up after ourselves
+trap 'rm -rf "$tmpdir"' EXIT
+# Ensure we leave no child processes behind on interruption or termination
+suppress_int=
+trap 'if [ -z "$suppress_int" ]; then trap - INT; kill -INT -- -$$ 2>/dev/null; kill -INT $$; fi; suppress_int=' INT
+trap 'trap - TERM; kill -TERM -- -$$ 2>/dev/null; kill -TERM $$;' TERM
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "$0" | sed 's/^# *//'
+}
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf "$fmt\n" "$@" >&2
+}
+
+msg_color() {
+    local color=$1
+    shift
+    local msg=$1
+    shift
+    # shellcheck disable=SC2059
+    if [ -n "${NO_COLOR:-}" ] || { [ -z "${COLOR:-}" ] && ! [ -t 1 ]; }; then
+        printf "${msg}\n" "$@" >&2
+        return
+    else
+        printf "\033[${color}m${msg}\033[0m\n" "$@" >&2
+    fi
+}
+
+msg_yellow() {
+    msg_color '33' "$@"
+}
+
+msg_red() {
+    msg_color '31' "$@"
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg_yellow "$@"
+    fi
+}
+
+msg_debug() {
+    if [ "${verbosity:-0}" -gt 1 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg_red "$@"
+    exit 1
+}
+
+should_die() {
+    local ret=$?
+    local msg=${1:-}
+
+    case $ret in
+    130)
+        msg_red "${msg:+$msg, }Interrupted"
+        kill -INT $$
+        ;;
+    0) ;;
+    *)
+        if [ -n "${continue_on_error:-}" ]; then
+            msg_yellow "Error: ${msg:+$msg, }Continuing after error with exit code $ret"
+            return $ret
+        else
+            die "Error: ${msg:+$msg, }Failed with exit code $ret"
+        fi
+        ;;
+    esac
+}
+
+run() {
+    local ret=0
+    if [ "${dry_run:-0}" = "1" ] || [ "${verbosity:-0}" -gt 0 ]; then
+        printf '❯ %s\n' "$(printcmd "$@")" >&2
+    fi
+    if [ "${dry_run:-0}" != "1" ]; then
+        suppress_int=1
+        ( trap - INT EXIT TERM; exec "$@" ) &
+        wait $! || ret=$?
+    fi
+    return $ret
+}
+
+run_remote() {
+    local host="$1"
+    shift
+    local dashx=
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        dashx=-x
+    fi
+    set -- bash $dashx -c "$(quote-args "$@")"
+    if [ -t 0 ]; then
+        cat /dev/null
+    else
+        cat
+    fi |
+        run ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")" || should_die "Remote execution of $* on $host failed" || return $?
+}
+
+run_remote_quiet() {
+    local host="$1"
+    shift
+    if [ -t 0 ]; then
+        cat /dev/null
+    else
+        cat
+    fi |
+        ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")" || should_die "Remote execution of $* on $host failed" || return $?
+}
+
+run_dest() {
+    if [ $dest_remote -eq 1 ]; then
+        run_remote "$dest_host" "$@"
+    else
+        "$@"
+    fi
+}
+
+run_src() {
+    if [ $src_remote -eq 1 ]; then
+        run_remote "$src_host" "$@"
+    else
+        "$@"
+    fi
+}
+
+set_archive_cmds() {
+    list_cmd=
+    unpack_cmd=
+    if run_src test -f "$1"; then
+        case "$1" in
+        *.7z)
+            list_cmd=(7z l)
+            unpack_cmd=(7z x -o"${tmp_path:-.}")
+            ;;
+        *.zip)
+            list_cmd=(unzip -l)
+            unpack_cmd=(unzip -q -d "${tmp_path:-.}")
+            ;;
+        *)
+            return 1
+            ;;
+        esac
+    else
+        return 1
+    fi
+}
+
+checksum_src_paths() {
+    local src_path
+    for src in "$@"; do
+        src_path=${src#*:}
+        if run_src test -f "$src_path"; then
+            run_src sha1sum "$src_path"
+        elif run_src test -d "$src_path"; then
+            echo "$src_path/"
+        fi
+    done
+}
+
+hard_link=0
+uncompress=0
+force_uncompress=0
+hoist=0
+stamp=0
+wildcard=0
+dry_run=0
+verbosity=0
+
+while getopts "HuUcswnvqh" opt; do
+    case $opt in
+    H) hard_link=1 ;;
+    u) uncompress=1 ;;
+    U)
+        force_uncompress=1
+        uncompress=1
+        ;;
+    c) hoist=1 ;;
+    s) stamp=1 ;;
+    w) wildcard=1 ;;
+    n) dry_run=1 ;;
+    v) verbosity=$((verbosity+1)) ;;
+    q) verbosity=$((verbosity-1)) ;;
+    h)
+        show_help
+        exit 0
+        ;;
+    *)
+        show_help
+        exit 1
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+paths=()
+for arg; do
+    if [ "$arg" = "--" ]; then
+        shift
+        break
+    fi
+    paths+=("$arg")
+    shift
+done
+
+if [ "${#paths[@]}" -lt 2 ]; then
+    show_help
+    exit 1
+fi
+
+src_paths=("${paths[@]:0:${#paths[@]}-1}")
+dest_path=${paths[-1]}
+
+# Expand wildcards if -w is set
+if [ $wildcard -eq 1 ]; then
+    expanded_src_paths=()
+    for src in "${src_paths[@]}"; do
+        if [[ "$src" == *:* ]]; then
+            src_remote=1
+            src_host="${src%%:*}"
+            src="${src#*:}"
+        else
+            src_remote=0
+            src_host=
+        fi
+        # Expand wildcards in the source path
+        IFS=$'\n' read -d '' -r -a expanded_src_paths_new < <(run_src python3 -c 'import glob; import sys; print("\n".join(glob.glob(sys.argv[1])))' "$src") || :
+        expanded_src_paths+=("${expanded_src_paths_new[@]}")
+    done
+    src_paths=("${expanded_src_paths[@]}")
+fi
+
+rsync_opts=(
+    --archive
+    --human-readable
+    --copy-links
+    --hard-links
+    --compress
+    --exclude=.git
+    --exclude=.DS_Store
+    --exclude="._*"
+    --exclude=.placeholder
+    --exclude=README.md
+    --exclude=systeminfo.txt
+    --exclude=metadata.txt
+    --exclude=readme.txt
+    --exclude=media
+    --exclude=SaveFiles
+    --exclude=agssave.\*
+    --exclude=settings
+)
+if [ -t 1 ] && [ $verbosity -le 1 ]; then
+    rsync_opts+=("--info=progress2")
+fi
+if [ $dry_run -eq 1 ]; then
+    rsync_opts+=("--dry-run")
+fi
+if [ "$verbosity" -gt 0 ]; then
+    rsync_opts+=("-$(printf 'v%.0s' $(seq 1 $verbosity))")
+elif [ "$verbosity" -lt 0 ]; then
+    rsync_opts+=("-$(printf 'q%.0s' $(seq 1 ${verbosity#-}))")
+fi
+rsync_opts+=("$@")
+
+if [[ $dest_path =~ /$ ]]; then
+    dir_dest=1
+else
+    dir_dest=0
+fi
+if [[ "$dest_path" == *:* ]]; then
+    dest_remote=1
+    dest_host="${dest_path%%:*}"
+    dest_path="${dest_path#*:}"
+else
+    dest_remote=0
+    dest_host=
+fi
+
+compressed_inputs=0
+directory_inputs=0
+for src in "${src_paths[@]}"; do
+    if [[ "$src" == *:* ]]; then
+        src_remote=1
+        src_host="${src%%:*}"
+        src="${src#*:}"
+    else
+        src_remote=0
+        src_host=
+    fi
+    if ! run_src test -e "$src"; then
+        die "error: $src does not exist\n"
+    fi
+    if [ $dir_dest -eq 0 ] && run_src test -d "$src"; then
+        die "error: $src is a directory but $dest_path is not\n"
+    fi
+    if [ $dir_dest -eq 1 ] && [ $uncompress -eq 1 ]; then
+        if run_src test -f "$src"; then
+            compressed_inputs=1
+        elif run_src test -d "$src"; then
+            directory_inputs=1
+        fi
+    fi
+done
+
+# if run_dest test -f "$dest_path"; then
+#     if [ $dir_dest -eq 1 ]; then
+#         die "error: $dest_path is a file, but is expected to be a directory\n"
+#     elif [ $directory_inputs -eq 1 ]; then
+#         die "error: $dest_path is a file, but a source is a directory\n"
+#     fi
+# fi
+
+# If we're uncompressing any compressed inputs, then we need to operate against a dest temporary
+# folder to gather the files, in the specified source order, prior to moving them to the destination.
+# If not, a single rsync directly to the destination should be sufficient.
+if [[ $compressed_inputs -eq 1 ]]; then
+    if [[ $stamp -eq 1 ]]; then
+        # If there are no directory inputs, compare the compressed file input timestamps against
+        # a dest timestamp '.unpacked' file in the directory destination, and skip the unpacking if
+        # the compressed files are older than the '.unpacked' file.
+        if [[ $directory_inputs -eq 0 ]] && [[ $dry_run -eq 0 ]] && [[ $force_uncompress -eq 0 ]]; then
+            dest_mtime=$(run_dest stat -c %Y "$dest_path/.unpacked" 2>/dev/null || echo 0)
+            to_update=0
+            for src in "${src_paths[@]}"; do
+                if [[ "$src" == *:* ]]; then
+                    src_remote=1
+                    src_host="${src%%:*}"
+                    src="${src#*:}"
+                else
+                    src_remote=0
+                    src_host=
+                fi
+                if run_src test -f "$src"; then
+                    if set_archive_cmds "$src" && run_src "${list_cmd[@]}" "$src" &>/dev/null; then
+                        src_mtime=$(run_src stat -c %Y "$src" || echo 0)
+                        if [ "${src_mtime:-0}" -gt "${dest_mtime:-0}" ]; then
+                            to_update=1
+                        fi
+                    fi
+                fi
+            done
+            checksum_src_paths "${src_paths[@]}" >"$tmpdir/unpacked.new" 2>/dev/null || true
+            run_dest cat "$dest_path/.unpacked" >"$tmpdir/unpacked" 2>/dev/null || true
+            if [ $to_update -eq 0 ] && cmp -s "$tmpdir/unpacked" "$tmpdir/unpacked.new"; then
+                msg_verbose "Skipping unpacking, all compressed inputs are older than .unpacked"
+                exit 0
+            fi
+        fi
+
+        if run_dest test -f "$dest_path/.unpacked"; then
+            if [ "$(run_dest find "$dest_path" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name .unpacked | wc -l | xargs)" -lt 1 ]; then
+                die "Empty folder at existing unpacked $dest_path"
+            fi
+        fi
+    fi
+
+    msg_debug "Uncompressing compressed inputs to $dest_path"
+    tmp_path=${dest_path%/}.tmp
+    trap 'run_dest rm -rf "$tmp_path"' EXIT
+    run_dest rm -rf "$tmp_path"
+    run_dest mkdir -p "$tmp_path"
+    for src in "${src_paths[@]}"; do
+        if [[ "$src" == *:* ]]; then
+            src_remote=1
+            src_host="${src%%:*}"
+            src="${src#*:}"
+        else
+            src_remote=0
+            src_host=
+        fi
+
+        if set_archive_cmds "$src" && run_src "${list_cmd[@]}" "$src" &>/dev/null; then
+            if [ $dest_remote -eq 1 ]; then
+                run scp "$src" "$dest_host:$tmp_path/"
+                src="$tmp_path/$(basename "$src")"
+            elif [ $src_remote -eq 1 ]; then
+                run scp "$src_host:$src" "$tmp_path/"
+                src="$tmp_path/$(basename "$src")"
+            fi
+            run_dest "${unpack_cmd[@]}" "$src"
+            if [ $dest_remote -eq 1 ] || [ $src_remote -eq 1 ]; then
+                run_dest rm -f "$tmp_path/$(basename "$src")"
+            fi
+            # If the archive unpacked a single directory, move its contents to the tmp_path root
+            if [ $hoist -eq 1 ] && [ "$(run_dest find "$tmp_path" -mindepth 1 -maxdepth 1 -not -name .DS_Store | wc -l | xargs)" = 1 ]; then
+                msg_debug "Hoisting contents of single-directory archive for $src"
+                single_dir=$(run_dest find "$tmp_path" -mindepth 1 -maxdepth 1 -type d)
+                if run_dest test -d "$single_dir"; then
+                    run_dest find "$single_dir" -mindepth 1 -maxdepth 1 -print0 | run_dest xargs -0 -I"{}" mv "{}" "$tmp_path/"
+                    run_dest rmdir "$single_dir"
+                fi
+            fi
+        elif [ $src_remote -eq 1 ]; then
+            run_dest rsync "${rsync_opts[@]}" "$src_host:$src" "$tmp_path/"
+        else
+            run_dest rsync "${rsync_opts[@]}" "$src" "$tmp_path/"
+        fi
+    done
+    run_dest mkdir -p "$(dirname "$dest_path")"
+    if [[ $hard_link -eq 1 ]]; then
+        run_dest cp -alf "$tmp_path/." "$dest_path" || true
+    fi
+    run_dest rsync "${rsync_opts[@]}" "$tmp_path/" "$dest_path"
+    if [[ $stamp -eq 1 ]]; then
+        checksum_src_paths "${src_paths[@]}" | run_dest tee "$dest_path/.unpacked" >/dev/null
+    fi
+else
+    run_dest mkdir -p "$(dirname "$dest_path")"
+    if [[ $dest_remote -eq 0 ]] && [[ $hard_link -eq 1 ]]; then
+        for src in "${src_paths[@]}"; do
+            if [[ $src =~ /$ ]]; then
+                run cp -alf "$src." "$dest_path"
+            else
+                run cp -alf "${src%/}" "$dest_path"
+            fi
+        done
+    fi
+    run rsync "${rsync_opts[@]}" "${src_paths[@]}" "${dest_host:+$dest_host:}$dest_path"
+fi

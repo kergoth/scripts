@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+#
+# library-sync: Synchronize my game library with a device
+#
+# Light wrapper around grabbing a config file and using it to generate libsync commands and run them.
+#
+# Usage: library-sync [options] [source] [destination_root]
+#
+# Options:
+#     -c CONFIG_FILE  Use the specified configuration file. If the path is relative,
+#                     assume it's relative to the 'source' directory. Default: source/.library-sync
+#     -i PATTERN      Include only source paths matching PATTERN
+#     -x PATTERN      Exclude source paths matching PATTERN
+#     -k              Continue as much as possible after an error
+#     -n              Dry run, don't actually do anything
+#     -v              Increase verbosity, can be specified multiple times
+#     -q              Decrease verbosity, can be specified multiple times
+#     -h              Show this help message and exit.
+
+set -euo pipefail
+
+scriptdir=$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)
+PATH="$scriptdir:$PATH"
+
+tmpdir=$(mktemp -d)
+# Clean up after ourselves
+trap 'rm -rf "$tmpdir"' EXIT
+# Allow clean handling of libsync's interruption, and ensure we leave no child processes behind
+suppress_int=
+trap 'if [ -z "$suppress_int" ]; then trap - INT; kill -INT -- -$$; kill -INT $$; fi; suppress_int=' INT
+# Ensure we leave no child processes behind on termination
+trap 'trap - TERM; kill -TERM -- -$$; kill -TERM $$;' TERM
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "$0" | sed 's/^# *//'
+}
+
+process_arguments() {
+    config_file=.library-sync
+    include=
+    exclude=
+    continue_on_error=
+    dry_run=
+    verbosity=0
+    libsync_opts=()
+
+    while getopts "c:i:x:knvqh" opt; do
+        case $opt in
+        c) config_file=$OPTARG ;;
+        i) include=$OPTARG ;;
+        x) exclude=$OPTARG ;;
+        k) continue_on_error=1 ;;
+        n) dry_run=1 ;;
+        v) verbosity=$((verbosity+1)) ;;
+        q) verbosity=$((verbosity-1)) ;;
+        h)
+            show_help
+            exit 0
+            ;;
+        *)
+            show_help
+            exit 1
+            ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    if [[ $# -ne 2 ]]; then
+        show_help
+        exit 1
+    fi
+    source=$1
+    destination_root=$2
+    case "$config_file" in
+    /*) ;;
+    *) config_file=$source/$config_file ;;
+    esac
+
+    if [ "$verbosity" -gt 1 ]; then
+        libsync_opts+=("-$(printf 'v%.0s' $(seq 2 $verbosity))")
+    elif [ "$verbosity" -lt 0 ]; then
+        libsync_opts+=("-$(printf 'q%.0s' $(seq 1 ${verbosity#-}))")
+    fi
+}
+
+# shellcheck disable=SC2120
+filter() {
+    if [ -n "$include" ]; then
+        grep -E ${nocase:+-i} "$@" "$include" || :
+    else
+        cat
+    fi |
+        if [ -n "$exclude" ]; then
+            grep -Ev ${nocase:+-i} "$@" "$exclude" || :
+        else
+            cat
+        fi
+}
+
+check_filter() {
+    # shellcheck disable=SC2119
+    test -n "$(filter)"
+}
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf "$fmt\n" "$@" >&2
+}
+
+msg_color() {
+    local color=$1
+    shift
+    local msg=$1
+    shift
+    # shellcheck disable=SC2059
+    if [ -n "${NO_COLOR:-}" ] || { [ -z "${COLOR:-}" ] && ! [ -t 1 ]; }; then
+        printf "${msg}\n" "$@" >&2
+        return
+    else
+        printf "\033[${color}m${msg}\033[0m\n" "$@" >&2
+    fi
+}
+
+msg_blue() {
+    msg_color '34' "$@"
+}
+
+msg_green() {
+    msg_color '32' "$@"
+}
+
+msg_red() {
+    msg_color '31' "$@"
+}
+
+msg_yellow() {
+    msg_color '33' "$@"
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg_yellow "$@"
+    fi
+}
+
+msg_debug() {
+    if [ "${verbosity:-0}" -gt 1 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg_red "$@"
+    exit 1
+}
+
+should_die() {
+    local ret=$?
+    local msg=${1:-}
+
+    case $ret in
+    130)
+        msg_red "${msg:+$msg, }Interrupted"
+        kill -INT $$
+        ;;
+    0) ;;
+    *)
+        if [ -n "${continue_on_error:-}" ]; then
+            msg_yellow "Error: ${msg:+$msg, }Continuing after error with exit code $ret"
+            return $ret
+        else
+            die "Error: ${msg:+$msg, }Failed with exit code $ret"
+        fi
+        ;;
+    esac
+}
+
+printcmd() {
+    python3 -c 'import subprocess,sys; print(subprocess.list2cmdline(sys.argv[1:]))' "$@"
+}
+
+run() {
+    local ret=0
+    if [ "${dry_run:-0}" = "1" ] || [ "${verbosity:-0}" -gt 0 ]; then
+        printf '❯ %s\n' "$(printcmd "$@")" >&2
+    fi
+    if [ "${dry_run:-0}" != "1" ]; then
+        suppress_int=1
+        ( trap - INT EXIT TERM; exec "$@" ) &
+        wait $! || ret=$?
+    fi
+    return $ret
+}
+
+run_libsync() {
+    local paths=()
+    for arg; do
+        if [ "$arg" = "--" ]; then
+            shift
+            break
+        fi
+        paths+=("$arg")
+        shift
+    done
+    local src_paths=("${paths[@]:0:${#paths[@]}-1}")
+    local sync_dest=${paths[-1]}
+
+    for i in "${!src_paths[@]}"; do
+        src=${src_paths[$i]}
+        if ! echo "$src" | check_filter; then
+            msg_debug "Skipping sync of $src due to filters\n"
+            return 0
+        fi
+        case "$src" in
+        /*) ;;
+        *) src="$source/$src" ;;
+        esac
+        src_paths[$i]="$src"
+    done
+    case "$sync_dest" in
+    /*)
+        case "$destination_root" in
+        *:*)
+            dest_host=${destination_root%%:*}
+            sync_dest="$dest_host:$sync_dest"
+            ;;
+        *) ;;
+        esac
+        ;;
+    *) sync_dest="$destination_root/$sync_dest" ;;
+    esac
+
+    if [ $# -gt 0 ]; then
+        set -- -ucsw ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest" -- "$@"
+    else
+        set -- -ucsw ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest"
+    fi
+
+    run libsync "$@" </dev/null
+}
+
+
+process_arguments "$@"
+shift $((OPTIND - 1))
+
+rsync -a "$config_file" "$tmpdir/config"
+cat "$tmpdir/config" \
+    | grep -v '^#' \
+    | grep -v '^ *$' >"$tmpdir/lines"
+
+ret=0
+while read -r line; do
+    # We handle quoted arguments, etc here, but leave any wildcards to the libsync script.
+    # This also avoids any use of eval.
+    IFS=$'\n' read -d '' -r -a src_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$line") || :
+    run_libsync "${src_args[@]}" || should_die "Failed to sync $line" || ret=$?
+done <"$tmpdir/lines"
+exit $ret
