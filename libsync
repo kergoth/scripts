@@ -130,7 +130,7 @@ run_remote() {
     else
         cat
     fi |
-        run ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")" || should_die "Remote execution of $* on $host failed" || return $?
+        run ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
 }
 
 run_remote_quiet() {
@@ -141,7 +141,7 @@ run_remote_quiet() {
     else
         cat
     fi |
-        ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")" || should_die "Remote execution of $* on $host failed" || return $?
+        ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
 }
 
 run_dest() {
