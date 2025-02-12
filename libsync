@@ -375,7 +375,7 @@ if [[ $compressed_inputs -eq 1 ]]; then
         # a dest timestamp '.unpacked' file in the directory destination, and skip the unpacking if
         # the compressed files are older than the '.unpacked' file.
         if [[ $directory_inputs -eq 0 ]] && [[ $dry_run -eq 0 ]] && [[ $force_uncompress -eq 0 ]]; then
-            dest_mtime=$(run_dest stat -c %Y "$dest_path/.unpacked" 2>/dev/null || echo 0)
+            dest_mtime=$(run_dest stat -c %Y "$dest_path/.unpacked" 2>/dev/null || echo 0) || true
             to_update=0
             for src in "${src_paths[@]}"; do
                 if [[ "$src" == *:* ]]; then
