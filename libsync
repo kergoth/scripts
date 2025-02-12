@@ -13,6 +13,8 @@
 #     -U          Force unpacking of compressed source files to the destination path, even if they're older than the .unpacked file
 #     -c          Hoist the contents of a single-directory compressed archive to the destination path, rather than creating a subdirectory
 #     -s          Use a stamp file to avoid re-unpacking compressed files that are older than the stamp file
+#     -S          Set the source root path (prepended to relative SRCPATHs). Default: The value of the LIBSYNC_SRC_ROOT variable, if set.
+#     -D          Set the destination root path (prepended to a relative DESTPATH). Default: The value of the LIBSYNC_DEST_ROOT variable, if set.
 #     -w          Apply wildcard expansion of source paths
 #     -n          Dry run, don't actually do anything
 #     -v          Increase verbosity, can be specified multiple times
@@ -198,10 +200,12 @@ force_uncompress=0
 hoist=0
 stamp=0
 wildcard=0
+src_root=${LIBSYNC_SRC_ROOT:-}
+dest_root=${LIBSYNC_DEST_ROOT:-}
 dry_run=0
 verbosity=0
 
-while getopts "HuUcswnvqh" opt; do
+while getopts "HuUcswSDnvqh" opt; do
     case $opt in
     H) hard_link=1 ;;
     u) uncompress=1 ;;
@@ -212,6 +216,8 @@ while getopts "HuUcswnvqh" opt; do
     c) hoist=1 ;;
     s) stamp=1 ;;
     w) wildcard=1 ;;
+    S) src_root=$OPTARG ;;
+    D) dest_root=$OPTARG ;;
     n) dry_run=1 ;;
     v) verbosity=$((verbosity+1)) ;;
     q) verbosity=$((verbosity-1)) ;;
@@ -309,10 +315,17 @@ else
     dest_remote=0
     dest_host=
 fi
+if [[ -n "$dest_root" ]]; then
+    case "$dest_path" in
+    /*) ;;
+    *) dest_path="$dest_root/$dest_path" ;;
+    esac
+fi
 
 compressed_inputs=0
 directory_inputs=0
-for src in "${src_paths[@]}"; do
+for i in "${!src_paths[@]}"; do
+    src=${src_paths[$i]}
     if [[ "$src" == *:* ]]; then
         src_remote=1
         src_host="${src%%:*}"
@@ -320,6 +333,15 @@ for src in "${src_paths[@]}"; do
     else
         src_remote=0
         src_host=
+    fi
+    if [[ -n "$src_root" ]]; then
+        case "$src" in
+        /*) ;;
+        *)
+            src="$src_root/$src"
+            src_paths[i]="${src_host:+$src_host:}$src"
+            ;;
+        esac
     fi
     if ! run_src test -e "$src"; then
         die "error: $src does not exist\n"
