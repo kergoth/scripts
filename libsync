@@ -395,11 +395,13 @@ if [[ $compressed_inputs -eq 1 ]]; then
                     fi
                 fi
             done
-            checksum_src_paths "${src_paths[@]}" >"$tmpdir/unpacked.new" 2>/dev/null || true
-            run_dest cat "$dest_path/.unpacked" >"$tmpdir/unpacked" 2>/dev/null || true
-            if [ $to_update -eq 0 ] && cmp -s "$tmpdir/unpacked" "$tmpdir/unpacked.new"; then
-                msg_verbose "Skipping unpacking, all compressed inputs are older than .unpacked"
-                exit 0
+            if [ $to_update -eq 0 ]; then
+                checksum_src_paths "${src_paths[@]}" >"$tmpdir/unpacked.new" 2>/dev/null || true
+                run_dest cat "$dest_path/.unpacked" >"$tmpdir/unpacked" 2>/dev/null || true
+                if cmp -s "$tmpdir/unpacked" "$tmpdir/unpacked.new"; then
+                    msg_verbose "Skipping unpacking, all compressed inputs are older than .unpacked"
+                    exit 0
+                fi
             fi
         fi
 
