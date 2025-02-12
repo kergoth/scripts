@@ -252,11 +252,17 @@ cat "$tmpdir/config" \
     | grep -v '^#' \
     | grep -v '^ *$' >"$tmpdir/lines"
 
-ret=0
+failed=0
 while read -r line; do
     # We handle quoted arguments, etc here, but leave any wildcards to the libsync script.
     # This also avoids any use of eval.
     IFS=$'\n' read -d '' -r -a src_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$line") || :
-    run_libsync "${src_args[@]}" || should_die "Failed to sync $line" || ret=$?
+    run_libsync "${src_args[@]}" || should_die "Failed to sync $line" || failed=$((failed + 1))
 done <"$tmpdir/lines"
-exit $ret
+
+if [[ $failed -ne 0 ]]; then
+    if [[ -n "$continue_on_error" ]]; then
+        msg_red "Failed to sync $failed paths"
+    fi
+    exit 1
+fi
