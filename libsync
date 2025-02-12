@@ -27,9 +27,8 @@ tmpdir=$(mktemp -d)
 # Clean up after ourselves
 trap 'rm -rf "$tmpdir"' EXIT
 # Ensure we leave no child processes behind on interruption or termination
-suppress_int=
-trap 'if [ -z "$suppress_int" ]; then trap - INT; kill -INT -- -$$ 2>/dev/null; kill -INT $$; fi; suppress_int=' INT
-trap 'trap - TERM; kill -TERM -- -$$ 2>/dev/null; kill -TERM $$;' TERM
+trap 'trap - INT; kill -INT $$' INT
+trap 'trap - TERM; kill -TERM -- -$$ 2>/dev/null; kill -TERM $$' TERM
 
 show_help() {
     sed -n '/^# Usage:/,/^# *-h /p' "$0" | sed 's/^# *//'
@@ -105,16 +104,12 @@ should_die() {
 }
 
 run() {
-    local ret=0
     if [ "${dry_run:-0}" = "1" ] || [ "${verbosity:-0}" -gt 0 ]; then
         printf '❯ %s\n' "$(printcmd "$@")" >&2
     fi
     if [ "${dry_run:-0}" != "1" ]; then
-        suppress_int=1
-        ( trap - INT EXIT TERM; exec "$@" ) &
-        wait $! || ret=$?
+        "$@" || return $?
     fi
-    return $ret
 }
 
 run_remote() {
