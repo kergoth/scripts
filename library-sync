@@ -262,7 +262,11 @@ done <"$tmpdir/lines"
 
 if [[ $failed -ne 0 ]]; then
     if [[ -n "$continue_on_error" ]]; then
-        msg_red "Failed to sync $failed paths"
+        suffix=
+        if [[ $failed -gt 1 ]]; then
+            suffix=s
+        fi
+        msg_red "Failed to sync $failed path$suffix"
     fi
     exit 1
 fi
