@@ -257,6 +257,9 @@ while read -r line; do
     # We handle quoted arguments, etc here, but leave any wildcards to the libsync script.
     # This also avoids any use of eval.
     IFS=$'\n' read -d '' -r -a src_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$line") || :
+    if [ ${#src_args[@]} -lt 2 ]; then
+        die "Error: At least two arguments are required in line: $line"
+    fi
     run_libsync "${src_args[@]}" || should_die "Failed to sync $line" || failed=$((failed + 1))
 done <"$tmpdir/lines"
 
