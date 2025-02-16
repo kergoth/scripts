@@ -209,18 +209,22 @@ run_libsync() {
     local src_paths=("${paths[@]:0:${#paths[@]}-1}")
     local sync_dest=${paths[-1]}
 
+    local skip=1
     for i in "${!src_paths[@]}"; do
         src=${src_paths[$i]}
-        if ! echo "$src" | check_filter; then
-            msg_debug "Skipping sync of $src due to filters\n"
-            return 0
+        if echo "$src" | check_filter; then
+            skip=0
         fi
         case "$src" in
         /*) ;;
         *) src="$source/$src" ;;
         esac
-        src_paths[$i]="$src"
+        src_paths[i]="$src"
     done
+    if [ "$skip" = "1" ]; then
+        msg_debug "Skipping sync due to filters\n"
+        return 0
+    fi
     case "$sync_dest" in
     /*)
         case "$destination_root" in
