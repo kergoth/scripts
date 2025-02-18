@@ -37,6 +37,7 @@ show_help() {
 
 process_arguments() {
     config_file=.library-sync
+    hoist=0
     include=
     exclude=
     continue_on_error=
@@ -44,9 +45,10 @@ process_arguments() {
     verbosity=0
     libsync_opts=()
 
-    while getopts "c:i:x:knvqh" opt; do
+    while getopts "c:Hi:x:knvqh" opt; do
         case $opt in
         c) config_file=$OPTARG ;;
+        H) hoist=1 ;;
         i) include=$OPTARG ;;
         x) exclude=$OPTARG ;;
         k) continue_on_error=1 ;;
@@ -80,6 +82,9 @@ process_arguments() {
         libsync_opts+=("-$(printf 'v%.0s' $(seq 2 $verbosity))")
     elif [ "$verbosity" -lt 0 ]; then
         libsync_opts+=("-$(printf 'q%.0s' $(seq 1 ${verbosity#-}))")
+    fi
+    if [ "$hoist" -eq 1 ]; then
+        libsync_opts+=("-c")
     fi
 }
 
@@ -239,9 +244,9 @@ run_libsync() {
     esac
 
     if [ $# -gt 0 ]; then
-        set -- -ucswH ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest" -- "$@"
+        set -- -uswHC ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest" -- "$@"
     else
-        set -- -ucswH ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest"
+        set -- -uswHC ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest"
     fi
 
     run libsync "$@" </dev/null
