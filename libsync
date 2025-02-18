@@ -168,6 +168,18 @@ set_archive_cmds() {
             list_cmd=(unzip -l)
             unpack_cmd=(unzip -q -d "${tmp_path:-.}")
             ;;
+        *.tar.gz)
+            list_cmd=(tar -tzf)
+            unpack_cmd=(tar -xz -C "${tmp_path:-.}" -f)
+            ;;
+        *.tar.bz2)
+            list_cmd=(tar -tzf)
+            unpack_cmd=(tar -xj -C "${tmp_path:-.}" -f)
+            ;;
+        *.tar.xz)
+            list_cmd=(tar -tzf)
+            unpack_cmd=(tar -xJ -C "${tmp_path:-.}" -f)
+            ;;
         *)
             return 1
             ;;
