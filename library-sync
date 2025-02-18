@@ -27,9 +27,9 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 # Allow clean handling of libsync's interruption, and ensure we leave no child processes behind
 suppress_int=
-trap 'if [ -z "$suppress_int" ]; then trap - INT; kill -INT -- -$$; kill -INT $$; fi; suppress_int=' INT
+trap 'if [ -z "$suppress_int" ]; then trap - INT; kill -INT -- -$$ &>/dev/null; kill -INT $$ &>/dev/null; fi; suppress_int=' INT
 # Ensure we leave no child processes behind on termination
-trap 'trap - TERM; kill -TERM -- -$$; kill -TERM $$;' TERM
+trap 'trap - TERM; kill -TERM -- -$$ &>/dev/null; kill -TERM $$ &>/dev/null;' TERM
 
 show_help() {
     sed -n '/^# Usage:/,/^# *-h /p' "$0" | sed 's/^# *//'

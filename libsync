@@ -27,8 +27,8 @@ tmpdir=$(mktemp -d)
 # Clean up after ourselves
 trap 'rm -rf "$tmpdir"' EXIT
 # Ensure we leave no child processes behind on interruption or termination
-trap 'trap - INT; kill -INT $$' INT
-trap 'trap - TERM; kill -TERM -- -$$ 2>/dev/null; kill -TERM $$' TERM
+trap 'trap - INT; kill -INT $$ &>/dev/null' INT
+trap 'trap - TERM; kill -TERM -- -$$ &>/dev/null; kill -TERM $$ &>/dev/null' TERM
 
 show_help() {
     sed -n '/^# Usage:/,/^# *-h /p' "$0" | sed 's/^# *//'
