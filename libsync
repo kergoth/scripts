@@ -212,7 +212,7 @@ checksum_src_paths() {
                     if [ $cache_checksums -eq 1 ]; then
                         run_src tee "$src_path.sha1"
                     else
-                        run_src cat
+                        cat
                     fi
             fi
         elif run_src test -d "$src_path"; then
