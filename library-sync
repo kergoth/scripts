@@ -227,7 +227,7 @@ run_libsync() {
         src_paths[i]="$src"
     done
     if [ "$skip" = "1" ]; then
-        msg_debug "Skipping sync due to filters\n"
+        msg_debug "Skipping sync due to filters: ${src_paths[*]}\n"
         return 0
     fi
     case "$sync_dest" in
