@@ -19,6 +19,12 @@
 
 set -euo pipefail
 
+# Exit with error on bash <4.0
+if [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
+    echo "Error: Bash version 4.0 or higher is required." >&2
+    exit 1
+fi
+
 scriptdir=$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)
 PATH="$scriptdir:$PATH"
 
@@ -211,6 +217,7 @@ run_libsync() {
         paths+=("$arg")
         shift
     done
+    printcmd run_libsync "${paths[@]}"
     local src_paths=("${paths[@]:0:${#paths[@]}-1}")
     local sync_dest=${paths[-1]}
 

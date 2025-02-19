@@ -23,6 +23,12 @@
 
 set -euo pipefail
 
+# Exit with error on bash <4.0
+if [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
+    echo "Error: Bash version 4.0 or higher is required." >&2
+    exit 1
+fi
+
 tmpdir=$(mktemp -d)
 # Clean up after ourselves
 trap 'rm -rf "$tmpdir"' EXIT
