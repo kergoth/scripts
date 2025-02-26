@@ -277,14 +277,20 @@ cat "$tmpdir/config" \
     | grep -v '^ *$' >"$tmpdir/lines"
 
 failed=0
-while read -r line; do
+while IFS=$'\t' read -r line extra_args; do
     # We handle quoted arguments, etc here, but leave any wildcards to the libsync script.
     # This also avoids any use of eval.
     IFS=$'\n' read -d '' -r -a src_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$line") || :
     if [ ${#src_args[@]} -lt 2 ]; then
         die "Error: At least two arguments are required in line: $line"
     fi
-    run_libsync "${src_args[@]}" -- "$@" || should_die "Failed to sync $line" || failed=$((failed + 1))
+    if [ -n "$extra_args" ]; then
+        # read -r -a extra_args <<< "$extra_args"
+        IFS=$'\n' read -d '' -r -a extra_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$extra_args") || :
+    else
+        extra_args=()
+    fi
+    run_libsync "${src_args[@]}" -- "${extra_args[@]}" "$@" || should_die "Failed to sync $line" || failed=$((failed + 1))
 done <"$tmpdir/lines"
 
 if [[ $failed -ne 0 ]]; then
