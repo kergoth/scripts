@@ -73,17 +73,6 @@ process_arguments() {
     done
     shift $((OPTIND - 1))
 
-    if [[ $# -ne 2 ]]; then
-        show_help
-        exit 1
-    fi
-    source=$1
-    destination_root=$2
-    case "$config_file" in
-    /*) ;;
-    *) config_file=$source/$config_file ;;
-    esac
-
     if [ "$verbosity" -gt 1 ]; then
         libsync_opts+=("-$(printf 'v%.0s' $(seq 2 $verbosity))")
     elif [ "$verbosity" -lt 0 ]; then
@@ -262,6 +251,26 @@ run_libsync() {
 process_arguments "$@"
 shift $((OPTIND - 1))
 
+paths=()
+for arg; do
+    if [ "$arg" = "--" ]; then
+        shift
+        break
+    fi
+    paths+=("$arg")
+    shift
+done
+if [[ ${#paths[@]} -ne 2 ]]; then
+    show_help
+    exit 1
+fi
+source=${paths[0]}
+destination_root=${paths[1]}
+case "$config_file" in
+/*) ;;
+*) config_file=$source/$config_file ;;
+esac
+
 rsync -a "$config_file" "$tmpdir/config"
 cat "$tmpdir/config" \
     | grep -v '^#' \
@@ -275,7 +284,7 @@ while read -r line; do
     if [ ${#src_args[@]} -lt 2 ]; then
         die "Error: At least two arguments are required in line: $line"
     fi
-    run_libsync "${src_args[@]}" || should_die "Failed to sync $line" || failed=$((failed + 1))
+    run_libsync "${src_args[@]}" -- "$@" || should_die "Failed to sync $line" || failed=$((failed + 1))
 done <"$tmpdir/lines"
 
 if [[ $failed -ne 0 ]]; then
