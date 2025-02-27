@@ -162,29 +162,32 @@ run_src() {
 }
 
 set_archive_cmds() {
+    local archive_file="$1"
+    shift
+    local unpack_dir="${1:-}"
     list_cmd=
     unpack_cmd=
-    if run_src test -f "$1"; then
-        case "$1" in
+    if run_src test -f "$archive_file"; then
+        case "$archive_file" in
         *.7z)
             list_cmd=(7z l)
-            unpack_cmd=(7z x -o"${tmp_path:-.}")
+            unpack_cmd=(7z x -o"${unpack_dir:-.}")
             ;;
         *.zip)
             list_cmd=(unzip -l)
-            unpack_cmd=(unzip -q -d "${tmp_path:-.}")
+            unpack_cmd=(unzip -q -d "${unpack_dir:-.}")
             ;;
         *.tar.gz)
             list_cmd=(tar -tzf)
-            unpack_cmd=(tar -xz -C "${tmp_path:-.}" -f)
+            unpack_cmd=(tar -xz -C "${unpack_dir:-.}" -f)
             ;;
         *.tar.bz2)
             list_cmd=(tar -tzf)
-            unpack_cmd=(tar -xj -C "${tmp_path:-.}" -f)
+            unpack_cmd=(tar -xj -C "${unpack_dir:-.}" -f)
             ;;
         *.tar.xz)
             list_cmd=(tar -tzf)
-            unpack_cmd=(tar -xJ -C "${tmp_path:-.}" -f)
+            unpack_cmd=(tar -xJ -C "${unpack_dir:-.}" -f)
             ;;
         *)
             return 1
@@ -470,7 +473,8 @@ if [[ $compressed_inputs -eq 1 ]]; then
             src_host=
         fi
 
-        if set_archive_cmds "$src" && run_src "${list_cmd[@]}" "$src" &>/dev/null; then
+        unpack_tmp=$(run_dest mktemp -d "$tmp_path/libsync.XXXXXX")
+        if set_archive_cmds "$src" "$unpack_tmp" && run_src "${list_cmd[@]}" "$src" &>/dev/null; then
             if [ $dest_remote -eq 1 ]; then
                 run scp "$src" "$dest_host:$tmp_path/"
                 src="$tmp_path/$(basename "$src")"
@@ -483,13 +487,16 @@ if [[ $compressed_inputs -eq 1 ]]; then
                 run_dest rm -f "$tmp_path/$(basename "$src")"
             fi
             # If the archive unpacked a single directory, move its contents to the tmp_path root
-            if [ $hoist -eq 1 ] && [ "$(run_dest find "$tmp_path" -mindepth 1 -maxdepth 1 -not -name .DS_Store | wc -l | xargs)" = 1 ]; then
+            if [ $hoist -eq 1 ] && [ "$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -not -name .DS_Store | wc -l | xargs)" = 1 ]; then
                 msg_debug "Hoisting contents of single-directory archive for $src"
-                single_dir=$(run_dest find "$tmp_path" -mindepth 1 -maxdepth 1 -type d)
+                single_dir=$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -type d)
                 if run_dest test -d "$single_dir"; then
                     run_dest find "$single_dir" -mindepth 1 -maxdepth 1 -print0 | run_dest xargs -0 -I"{}" mv "{}" "$tmp_path/"
                     run_dest rmdir "$single_dir"
                 fi
+            else
+                run_dest mv "$unpack_tmp"/* "$tmp_path/"
+                run_dest rmdir "$unpack_tmp"
             fi
         elif [ $src_remote -eq 1 ]; then
             run_dest rsync "${rsync_opts[@]}" "$src_host:$src" "$tmp_path/"
