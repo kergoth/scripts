@@ -239,9 +239,9 @@ run_libsync() {
     esac
 
     if [ $# -gt 0 ]; then
-        set -- -uswHC ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest" -- "$@"
+        set -- -uswC ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest" -- "$@"
     else
-        set -- -uswHC ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest"
+        set -- -uswC ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest"
     fi
 
     run libsync "$@" </dev/null
