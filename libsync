@@ -319,6 +319,7 @@ rsync_opts=(
     --exclude=.git
     --exclude=.DS_Store
     --exclude="._*"
+    --exclude="*.sha1"
     --exclude=.placeholder
     --exclude=README.md
     --exclude=systeminfo.txt
