@@ -62,7 +62,7 @@ fi
 binary="${XDG_DATA_HOME:-$HOME/.local}/bin/decky-linux-binary"
 if ! [ -x "$binary" ]; then
     mkdir -p "$(dirname "$binary")"
-    curl -fsSL --output "$binary" https://github.com/SteamDeckHomebrew/cli/releases/download/0.0.4/decky-linux-x86_64
+    curl -fsSL --output "$binary" https://github.com/SteamDeckHomebrew/cli/releases/latest/download/decky-linux-x86_64
     chmod +x "$binary"
 fi
 if [ "${1:-}" = "plugin" ] && [ "${2:-}" = "build" ]; then
