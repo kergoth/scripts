@@ -165,13 +165,20 @@ set_archive_cmds() {
     local archive_file="$1"
     shift
     local unpack_dir="${1:-}"
+    local z_verbosity
+
     list_cmd=
     unpack_cmd=
     if run_src test -f "$archive_file"; then
         case "$archive_file" in
         *.7z)
+            if [ $verbosity -gt 3 ]; then
+                z_verbosity=3
+            else
+                z_verbosity=$verbosity
+            fi
             list_cmd=(7z l)
-            unpack_cmd=(7z x -o"${unpack_dir:-.}")
+            unpack_cmd=(7z "-bb$z_verbosity" x -o"${unpack_dir:-.}")
             ;;
         *.zip)
             list_cmd=(unzip -l)
