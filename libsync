@@ -506,8 +506,8 @@ if [[ $compressed_inputs -eq 1 ]]; then
                 fi
             else
                 run_dest mv "$unpack_tmp"/* "$tmp_path/"
-                run_dest rmdir "$unpack_tmp"
             fi
+            run_dest rmdir "$unpack_tmp"
         elif [ $src_remote -eq 1 ]; then
             run_dest rsync "${rsync_opts[@]}" "$src_host:$src" "$tmp_path/"
         else
