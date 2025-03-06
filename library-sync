@@ -9,6 +9,7 @@
 # Options:
 #     -c CONFIG_FILE  Use the specified configuration file. If the path is relative,
 #                     assume it's relative to the 'source' directory. Default: source/.library-sync
+#     -H              Hoist the contents of a single-directory compressed archive to the destination path, rather than creating a subdirectory
 #     -i PATTERN      Include only source paths matching PATTERN
 #     -x PATTERN      Exclude source paths matching PATTERN
 #     -k              Continue as much as possible after an error
