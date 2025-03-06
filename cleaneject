@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+if [ -d "$1/.Spotlight-V100" ]; then
+    dot_clean -m "$1"
+    find "$1" \( -name .DS_Store -o -name .apdisk \) -delete
+    rm -rf "$1/.Trashes"
+    rm -rf "$1/.Spotlight-V100"
+    rm -rf "$1/.fseventsd"
+    rm -rf "$1/.TemporaryItems"
+    hdiutil unmount "$1"
+fi
