@@ -514,7 +514,14 @@ if [[ $compressed_inputs -eq 1 ]]; then
             run_dest rsync "${rsync_opts[@]}" "$src" "$tmp_path/"
         fi
     done
-    run_dest mkdir -p "$(dirname "$dest_path")"
+    case "$dest_path" in
+    */)
+        run_dest mkdir -p "$dest_path"
+        ;;
+    *)
+        run_dest mkdir -p "$(dirname "$dest_path")"
+        ;;
+    esac
     if [[ $hard_link -eq 1 ]]; then
         run_dest cp -alf "$tmp_path/." "$dest_path" || true
     fi
@@ -523,7 +530,14 @@ if [[ $compressed_inputs -eq 1 ]]; then
         checksum_src_paths "${src_paths[@]}" | run_dest tee "$dest_path/.unpacked" >/dev/null
     fi
 else
-    run_dest mkdir -p "$(dirname "$dest_path")"
+    case "$dest_path" in
+    */)
+        run_dest mkdir -p "$dest_path"
+        ;;
+    *)
+        run_dest mkdir -p "$(dirname "$dest_path")"
+        ;;
+    esac
     if [[ $dest_remote -eq 0 ]] && [[ $hard_link -eq 1 ]]; then
         for src in "${src_paths[@]}"; do
             if [[ $src =~ /$ ]]; then
