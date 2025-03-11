@@ -93,19 +93,19 @@ should_die() {
     local msg=${1:-}
 
     case $ret in
-    130)
-        msg_red "${msg:+$msg, }Interrupted"
-        kill -INT $$
-        ;;
-    0) ;;
-    *)
-        if [ -n "${continue_on_error:-}" ]; then
-            msg_yellow "Error: ${msg:+$msg, }Continuing after error with exit code $ret"
-            return $ret
-        else
-            die "Error: ${msg:+$msg, }Failed with exit code $ret"
-        fi
-        ;;
+        130)
+            msg_red "${msg:+$msg, }Interrupted"
+            kill -INT $$
+            ;;
+        0) ;;
+        *)
+            if [ -n "${continue_on_error:-}" ]; then
+                msg_yellow "Error: ${msg:+$msg, }Continuing after error with exit code $ret"
+                return $ret
+            else
+                die "Error: ${msg:+$msg, }Failed with exit code $ret"
+            fi
+            ;;
     esac
 }
 
@@ -130,8 +130,8 @@ run_remote() {
         cat /dev/null
     else
         cat
-    fi |
-        run ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
+    fi \
+        | run ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
 }
 
 run_remote_quiet() {
@@ -141,8 +141,8 @@ run_remote_quiet() {
         cat /dev/null
     else
         cat
-    fi |
-        ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
+    fi \
+        | ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
 }
 
 run_dest() {
@@ -164,41 +164,53 @@ run_src() {
 set_archive_cmds() {
     local archive_file="$1"
     shift
-    local unpack_dir="${1:-}"
+    local unpack_dir="$1"
+    shift
+    local is_dest="${1:-1}"
+    shift
     local z_verbosity
 
     list_cmd=
     unpack_cmd=
-    if run_src test -f "$archive_file"; then
+    if { [ "$is_dest" = 1 ] && run_dest test -f "$archive_file"; } || { [ "$is_dest" = 0 ] && run_src test -f "$archive_file"; }; then
+        if { [ "$is_dest" = 1 ] && [ "$dest_has_unar" = 1 ]; } || { [ "$is_dest" = 0 ] && [ "$src_has_unar" = 1 ]; }; then
+            case "$archive_file" in
+            *.7z|*.zip|*.tar.gz|*.tar.bz2|*.tar.xz)
+                list_cmd=(lsar)
+                unpack_cmd=(unar -D -o "$unpack_dir")
+                return 0
+            ;;
+            esac
+        fi
         case "$archive_file" in
-        *.7z)
-            if [ $verbosity -gt 3 ]; then
-                z_verbosity=3
-            else
-                z_verbosity=$verbosity
-            fi
-            list_cmd=(7z l)
-            unpack_cmd=(7z "-bb$z_verbosity" x -o"${unpack_dir:-.}")
-            ;;
-        *.zip)
-            list_cmd=(unzip -l)
-            unpack_cmd=(unzip -q -d "${unpack_dir:-.}")
-            ;;
-        *.tar.gz)
-            list_cmd=(tar -tzf)
-            unpack_cmd=(tar -xz -C "${unpack_dir:-.}" -f)
-            ;;
-        *.tar.bz2)
-            list_cmd=(tar -tzf)
-            unpack_cmd=(tar -xj -C "${unpack_dir:-.}" -f)
-            ;;
-        *.tar.xz)
-            list_cmd=(tar -tzf)
-            unpack_cmd=(tar -xJ -C "${unpack_dir:-.}" -f)
-            ;;
-        *)
-            return 1
-            ;;
+            *.7z)
+                if [ $verbosity -gt 3 ]; then
+                    z_verbosity=3
+                else
+                    z_verbosity=$verbosity
+                fi
+                list_cmd=(7z l)
+                unpack_cmd=(7z "-bb$z_verbosity" x -o"$unpack_dir")
+                ;;
+            *.zip)
+                list_cmd=(unzip -l)
+                unpack_cmd=(unzip -q -d "$unpack_dir")
+                ;;
+            *.tar.gz)
+                list_cmd=(tar -tzf)
+                unpack_cmd=(tar -xz -C "$unpack_dir" -f)
+                ;;
+            *.tar.bz2)
+                list_cmd=(tar -tzf)
+                unpack_cmd=(tar -xj -C "$unpack_dir" -f)
+                ;;
+            *.tar.xz)
+                list_cmd=(tar -tzf)
+                unpack_cmd=(tar -xJ -C "$unpack_dir" -f)
+                ;;
+            *)
+                return 1
+                ;;
         esac
     else
         return 1
@@ -255,30 +267,30 @@ verbosity=0
 
 while getopts "CVHuUcswSDnvqh" opt; do
     case $opt in
-    C) cache_checksums=1 ;;
-    V) validate_checksums=1 ;;
-    H) hard_link=1 ;;
-    u) uncompress=1 ;;
-    U)
-        force_uncompress=1
-        uncompress=1
-        ;;
-    c) hoist=1 ;;
-    s) stamp=1 ;;
-    w) wildcard=1 ;;
-    S) src_root=$OPTARG ;;
-    D) dest_root=$OPTARG ;;
-    n) dry_run=1 ;;
-    v) verbosity=$((verbosity + 1)) ;;
-    q) verbosity=$((verbosity - 1)) ;;
-    h)
-        show_help
-        exit 0
-        ;;
-    *)
-        show_help
-        exit 1
-        ;;
+        C) cache_checksums=1 ;;
+        V) validate_checksums=1 ;;
+        H) hard_link=1 ;;
+        u) uncompress=1 ;;
+        U)
+            force_uncompress=1
+            uncompress=1
+            ;;
+        c) hoist=1 ;;
+        s) stamp=1 ;;
+        w) wildcard=1 ;;
+        S) src_root=$OPTARG ;;
+        D) dest_root=$OPTARG ;;
+        n) dry_run=1 ;;
+        v) verbosity=$((verbosity + 1)) ;;
+        q) verbosity=$((verbosity - 1)) ;;
+        h)
+            show_help
+            exit 0
+            ;;
+        *)
+            show_help
+            exit 1
+            ;;
     esac
 done
 shift $((OPTIND - 1))
@@ -371,8 +383,8 @@ else
 fi
 if [[ -n "$dest_root" ]]; then
     case "$dest_path" in
-    /*) ;;
-    *) dest_path="$dest_root/$dest_path" ;;
+        /*) ;;
+        *) dest_path="$dest_root/$dest_path" ;;
     esac
 fi
 
@@ -390,11 +402,11 @@ for i in "${!src_paths[@]}"; do
     fi
     if [[ -n "$src_root" ]]; then
         case "$src" in
-        /*) ;;
-        *)
-            src="$src_root/$src"
-            src_paths[i]="${src_host:+$src_host:}$src"
-            ;;
+            /*) ;;
+            *)
+                src="$src_root/$src"
+                src_paths[i]="${src_host:+$src_host:}$src"
+                ;;
         esac
     fi
     if ! run_src test -e "$src"; then
@@ -420,10 +432,19 @@ done
 #     fi
 # fi
 
+src_has_unar=0
+dest_has_unar=0
+
 # If we're uncompressing any compressed inputs, then we need to operate against a dest temporary
 # folder to gather the files, in the specified source order, prior to moving them to the destination.
 # If not, a single rsync directly to the destination should be sufficient.
 if [[ $compressed_inputs -eq 1 ]]; then
+    if run_src command -v unar &>/dev/null; then
+        src_has_unar=1
+    fi
+    if run_dest command -v unar &>/dev/null; then
+        dest_has_unar=1
+    fi
     if [[ $stamp -eq 1 ]]; then
         # If there are no directory inputs, compare the compressed file input timestamps against
         # a dest timestamp '.unpacked' file in the directory destination, and skip the unpacking if
@@ -443,7 +464,7 @@ if [[ $compressed_inputs -eq 1 ]]; then
                         src_remote=0
                         src_host=
                     fi
-                    if run_src test -f "$src" && set_archive_cmds "$src"; then
+                    if run_src test -f "$src" && set_archive_cmds "$src" .; then
                         src_mtime=$(run_src stat -c %Y "$src" || echo 0)
                         if [ "${src_mtime:-0}" -gt "${dest_mtime:-0}" ]; then
                             to_update=1
@@ -488,7 +509,7 @@ if [[ $compressed_inputs -eq 1 ]]; then
         fi
 
         unpack_tmp=$(run_dest mktemp -d "$tmp_path/libsync.XXXXXX")
-        if set_archive_cmds "$src" "$unpack_tmp" && run_src "${list_cmd[@]}" "$src" &>/dev/null; then
+        if set_archive_cmds "$src" "$unpack_tmp" 0 && run_src "${list_cmd[@]}" "$src" &>/dev/null; then
             if [ $dest_remote -eq 1 ]; then
                 run scp "$src" "$dest_host:$tmp_path/"
                 src="$tmp_path/$(basename "$src")"
@@ -496,6 +517,7 @@ if [[ $compressed_inputs -eq 1 ]]; then
                 run scp "$src_host:$src" "$tmp_path/"
                 src="$tmp_path/$(basename "$src")"
             fi
+            set_archive_cmds "$src" "$unpack_tmp" 1
             run_dest "${unpack_cmd[@]}" "$src"
             if [ $dest_remote -eq 1 ] || [ $src_remote -eq 1 ]; then
                 run_dest rm -f "$tmp_path/$(basename "$src")"
@@ -505,7 +527,9 @@ if [[ $compressed_inputs -eq 1 ]]; then
                 msg_debug "Hoisting contents of single-directory archive for $src"
                 single_dir=$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -type d -not -name .DS_Store -not -name ._\*)
                 if run_dest test -d "$single_dir"; then
-                    run_dest find "$single_dir" -mindepth 1 -maxdepth 1 \( -not -name .DS_Store -a -not -name ._\* \) -print0 | run_dest xargs -0 -I"{}" mv "{}" "$tmp_path/"
+                    run_dest find "$single_dir" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name ._\* \
+                        | tr '\n' '\0' \
+                        | run_dest xargs -0 -I"{}" mv "{}" "$tmp_path/"
                     run_dest rm -rf "$single_dir"
                 fi
             else
@@ -513,34 +537,42 @@ if [[ $compressed_inputs -eq 1 ]]; then
             fi
             run_dest rmdir "$unpack_tmp"
         elif [ $src_remote -eq 1 ]; then
+            run_dest rmdir "$unpack_tmp"
             run_dest rsync "${rsync_opts[@]}" "$src_host:$src" "$tmp_path/"
         else
+            run_dest rmdir "$unpack_tmp"
             run_dest rsync "${rsync_opts[@]}" "$src" "$tmp_path/"
         fi
     done
     case "$dest_path" in
-    */)
-        run_dest mkdir -p "$dest_path"
-        ;;
-    *)
-        run_dest mkdir -p "$(dirname "$dest_path")"
-        ;;
+        */)
+            run_dest mkdir -p "$dest_path"
+            ;;
+        *)
+            run_dest mkdir -p "$(dirname "$dest_path")"
+            ;;
     esac
     if [[ $hard_link -eq 1 ]]; then
         run_dest cp -alf "$tmp_path/." "$dest_path" || true
     fi
+
+    # This is performing a local file copy from a temporary path we're removing
+    # to the destination. Ideally this would just be a move command, or hard
+    # link copy, but in either case we lose the ability to apply rsync's file
+    # exclusions, which is a deal breaker, unless I can apply other exclusions
+    # to the actual unpack commands.
     run_dest rsync "${rsync_opts[@]}" "$tmp_path/" "$dest_path"
     if [[ $stamp -eq 1 ]]; then
         checksum_src_paths "${src_paths[@]}" | run_dest tee "$dest_path/.unpacked" >/dev/null
     fi
 else
     case "$dest_path" in
-    */)
-        run_dest mkdir -p "$dest_path"
-        ;;
-    *)
-        run_dest mkdir -p "$(dirname "$dest_path")"
-        ;;
+        */)
+            run_dest mkdir -p "$dest_path"
+            ;;
+        *)
+            run_dest mkdir -p "$(dirname "$dest_path")"
+            ;;
     esac
     if [[ $dest_remote -eq 0 ]] && [[ $hard_link -eq 1 ]]; then
         for src in "${src_paths[@]}"; do
