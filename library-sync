@@ -154,6 +154,12 @@ msg_debug() {
     fi
 }
 
+msg_verydebug() {
+    if [ "${verbosity:-0}" -gt 2 ]; then
+        msg "$@"
+    fi
+}
+
 die() {
     msg_red "$@"
     exit 1
@@ -223,7 +229,7 @@ run_libsync() {
         src_paths[i]="$src"
     done
     if [ "$skip" = "1" ]; then
-        msg_debug "Skipping sync due to filters: ${src_paths[*]}\n"
+        msg_verydebug "Skipping sync due to filters: ${src_paths[*]}\n"
         return 0
     fi
     case "$sync_dest" in
