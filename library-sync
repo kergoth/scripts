@@ -219,7 +219,7 @@ run_libsync() {
     local skip=1
     for i in "${!src_paths[@]}"; do
         src=${src_paths[$i]}
-        if echo "$src" | check_filter; then
+        if printf '%s\t%s\n' "$src" "$sync_dest" | check_filter; then
             skip=0
         fi
         case "$src" in
