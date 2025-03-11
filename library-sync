@@ -272,10 +272,40 @@ case "$config_file" in
 *) config_file=$source/$config_file ;;
 esac
 
-rsync -a "$config_file" "$tmpdir/config"
-cat "$tmpdir/config" \
-    | grep -v '^#' \
-    | grep -v '^ *$' >"$tmpdir/lines"
+read_config_file() {
+    local config_file="$1"
+    shift
+    local tempfile
+
+    tempfile="$(mktemp "$tmpdir/config.XXXXXX")"
+
+    rsync -a "$config_file" "$tempfile"
+    cat "$tempfile" \
+        | { grep -v '^#' || true; } \
+        | { grep -v '^ *$' || true; } \
+        | while read -r line; do
+            case "$line" in
+                include\ *)
+                    include_file=${line#include }
+                    case "$include_file" in
+                        /*)
+                            ;;
+                        *)
+                            include_file="$(dirname "$config_file")/$include_file"
+                            ;;
+                    esac
+                    if ! [ -e "$include_file" ]; then
+                        die "Error: include file $include_file from $config_file not found"
+                    fi
+                    read_config_file "$include_file"
+                    ;;
+                *)
+                    printf '%s\n' "$line"
+            esac
+        done
+}
+
+read_config_file "$config_file" >"$tmpdir/lines"
 
 failed=0
 while IFS=$'\t' read -r line extra_args; do
