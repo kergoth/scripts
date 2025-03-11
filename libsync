@@ -209,24 +209,27 @@ checksum_src_paths() {
     local src_path
     for src in "$@"; do
         src_path=${src#*:}
+        src_dir=$(dirname "$src_path")
+        src_file=$(basename "$src_path")
         if run_src test -f "$src_path"; then
-            if [ $cache_checksums -eq 1 ] && run_src test -f "$src_path.sha1"; then
-                msg_verbose "Using cached checksum for $src_path"
-                existing_chksum=$(run_src cat "$src_path.sha1" | cut -d" " -f1)
+            if [ $cache_checksums -eq 1 ] && run_src test -f "$src_dir/.sha1/$src_file.sha1"; then
+                msg_debug "Using cached checksum for $src_path"
+                existing_chksum=$(run_src cat "$src_dir/.sha1/$src_file.sha1" | cut -d" " -f1)
                 if [ $validate_checksums -eq 1 ]; then
                     msg_verbose "Validating checksum for $src_path"
                     chksum=$(run_src sha1sum "$src_path" | cut -d" " -f1)
                     if [ "$chksum" != "$existing_chksum" ]; then
-                        die "Checksum mismatch for $src_path in $src_path.sha1"
+                        die "Checksum mismatch for $src_path in $src_dir/.sha1/$src_file.sha1"
                     fi
                 fi
                 echo "$existing_chksum $src_path"
             else
                 msg_verbose "Calculating checksum for $src_path"
                 chksum=$(run_src sha1sum "$src_path" | cut -d" " -f1)
-                echo "$chksum $src_path" |
-                    if [ $cache_checksums -eq 1 ]; then
-                        run_src tee "$src_path.sha1"
+                echo "$chksum $src_path" \
+                    | if [ $cache_checksums -eq 1 ]; then
+                        mkdir -p "$src_dir/.sha1"
+                        run_src tee "$src_dir/.sha1/$src_file.sha1"
                     else
                         cat
                     fi
@@ -326,6 +329,7 @@ rsync_opts=(
     --exclude=.git
     --exclude=.DS_Store
     --exclude="._*"
+    --exclude=.sha1
     --exclude="*.sha1"
     --exclude=.placeholder
     --exclude=README.md
