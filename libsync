@@ -318,7 +318,7 @@ if [ $wildcard -eq 1 ]; then
 fi
 
 rsync_opts=(
-    --archive
+    -rlptD
     --human-readable
     --copy-links
     --hard-links
