@@ -245,7 +245,7 @@ run_libsync() {
             dest_host=${destination_root%%:*}
             sync_dest="$dest_host:$sync_dest"
             ;;
-        *) ;;
+        *) sync_dest="$destination_root/$sync_dest" ;;
         esac
         ;;
     *) sync_dest="$destination_root/$sync_dest" ;;
