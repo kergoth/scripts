@@ -12,6 +12,7 @@
 #     -H              Hoist the contents of a single-directory compressed archive to the destination path, rather than creating a subdirectory
 #     -i PATTERN      Include only source paths matching PATTERN
 #     -x PATTERN      Exclude source paths matching PATTERN
+#     -l              Hard link files in a local file copy, rather than copying with rsync, if DESTPATH is local
 #     -k              Continue as much as possible after an error
 #     -n              Dry run, don't actually do anything
 #     -v              Increase verbosity, can be specified multiple times
@@ -47,17 +48,19 @@ process_arguments() {
     hoist=0
     include=
     exclude=
+    hard_link=0
     continue_on_error=
     dry_run=
     verbosity=0
     libsync_opts=()
 
-    while getopts "c:Hi:x:knvqh" opt; do
+    while getopts "c:Hi:x:lknvqh" opt; do
         case $opt in
         c) config_file=$OPTARG ;;
         H) hoist=1 ;;
         i) include=$OPTARG ;;
         x) exclude=$OPTARG ;;
+        l) hard_link=1 ;;
         k) continue_on_error=1 ;;
         n) dry_run=1 ;;
         v) verbosity=$((verbosity+1)) ;;
@@ -81,6 +84,9 @@ process_arguments() {
     fi
     if [ "$hoist" -eq 1 ]; then
         libsync_opts+=("-c")
+    fi
+    if [ "$hard_link" -eq 1 ]; then
+        libsync_opts+=("-H")
     fi
 }
 
