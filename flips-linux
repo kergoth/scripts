@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf "$fmt\n" "$@" >&2
+}
+
+msg_verbose() {
+    if [ "${verbose:-0}" -ge "1" ]; then
+        msg "$@"
+    fi
+}
+
+msg_debug() {
+    if [ "${verbose:-0}" -ge "2" ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg "$@"
+    exit 1
+}
+
+has() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+printcmd() {
+    python3 -c 'import subprocess,sys
+print(subprocess.list2cmdline(sys.argv[1:]))' "$@"
+}
+
+run() {
+    if [ "${verbose:-0}" -gt 0 ]; then
+        printf '❯ %s\n' "$(printcmd "$@")" >&2
+    fi
+    if [ -z "${dry_run:-}" ]; then
+        "$@"
+    fi
+}
+
+verbose=1
+
+LIMA_INSTANCE=${LIMA_INSTANCE:-default}
+
+if ! limactl list --quiet "$LIMA_INSTANCE" &>/dev/null; then
+    run limactl create --name="$LIMA_INSTANCE" "$HOME/Projects/lima/$LIMA_INSTANCE.yaml"
+    run limactl start "$LIMA_INSTANCE" \
+        || die "failed to start $LIMA_INSTANCE VM"
+    trap 'run limactl stop -f "$LIMA_INSTANCE"' EXIT INT TERM
+elif limactl list --all-fields "$LIMA_INSTANCE" | tail -n +2 | awk '{print $2}' | grep -q Stopped; then
+    run limactl start "$LIMA_INSTANCE" \
+        || die "failed to start $LIMA_INSTANCE VM"
+    trap 'run limactl stop -f "$LIMA_INSTANCE"' EXIT INT TERM
+fi
+
+binary="${XDG_DATA_HOME:-$HOME/.local}/bin/flips-linux-binary"
+if ! [ -x "$binary" ]; then
+    tmpdir=$(mktemp -d -t "${0##*/}.XXXXXX")
+    trap 'rm -rf "$tmpdir"' EXIT
+
+    curl -fsSL --output "$tmpdir/flips.zip" https://github.com/Alcaro/Flips/releases/latest/download/flips-linux.zip
+    ( cd "$tmpdir" && unzip flips.zip flips )
+    chmod +x "$tmpdir/flips"
+    mkdir -p "$(dirname "$binary")"
+    mv "$tmpdir/flips" "$binary"
+fi
+if ! limactl shell "$LIMA_INSTANCE" test -f /usr/lib/x86_64-linux-gnu/libgtk-3.so.0; then
+    run limactl shell "$LIMA_INSTANCE" sudo apt-get update
+    run limactl shell "$LIMA_INSTANCE" sudo apt-get install -y libgtk-3-0t64
+fi
+if ! limactl shell "$LIMA_INSTANCE" test -f /usr/lib/x86_64-linux-gnu/libgomp.so.1; then
+    run limactl shell "$LIMA_INSTANCE" sudo apt-get update
+    run limactl shell "$LIMA_INSTANCE" sudo apt-get install -y libgomp1
+fi
+run limactl shell "$LIMA_INSTANCE" "$binary" "$@"
