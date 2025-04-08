@@ -194,7 +194,7 @@ set_archive_cmds() {
                 ;;
             *.zip)
                 list_cmd=(unzip -l)
-                unpack_cmd=(unzip -q -d "$unpack_dir")
+                unpack_cmd=(unzip -q -o -d "$unpack_dir")
                 ;;
             *.tar.gz)
                 list_cmd=(tar -tzf)
