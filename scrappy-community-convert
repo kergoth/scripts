@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+tmpdir=$(mktemp -d -t "${0##*/}.XXXXXX")
+trap 'rm -rf "$tmpdir"' EXIT
+
+templatedir=mnt/mmc/MUOS/application/Scrappy/.scrappy/templates
+newzip=scrappy-%s.muxzip
+
+ret=0
+for infile; do
+    infile=$(abspath "$infile")
+    rm -rf "${tmpdir:?}"/*
+
+    mkdir -p "$tmpdir/$templatedir"
+    if echo "$infile" | grep -iq '\.zip$'; then
+        ( cd "$tmpdir" && unzip "$infile" )
+
+        find "$tmpdir" -type f -iname \*.xml -print0 | xargs -0 -I"{}" mvd "{}" "$tmpdir/$templatedir/"
+        find "$tmpdir" -type f -iname \*.png -print0 | xargs -0 -I"{}" mvd "{}" "$tmpdir/$templatedir/resources/"
+        find "$tmpdir" -type f -iname \*.jpg -print0 | xargs -0 -I"{}" mvd "{}" "$tmpdir/$templatedir/resources/"
+        find "$tmpdir" -type f -not -wholename '*/mmc/*' | \
+            while read -r fn; do
+                echo >&2 "Error: unexpected file at $fn for $infile"
+                exit 1
+            done || { ret=1; continue; }
+    elif echo "$infile" | grep -iq '\.xml$'; then
+        cp -a "$infile" "$tmpdir/$templatedir/"
+    else
+        echo >&2 "Unknown input file format for $infile"
+        ret=1
+        continue
+    fi
+
+    # shellcheck disable=SC2059
+    outfile="$(dirname "$infile")/$(printf "$newzip" "$(basename "${infile%.*}")")"
+    rm -f "$outfile"
+    (cd "$tmpdir" && zip -r "$outfile" "${templatedir%%/*}")
+    echo >&2 "Successfully wrote $outfile"
+done
+exit $ret
