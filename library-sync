@@ -328,7 +328,6 @@ while IFS=$'\t' read -r line extra_args; do
         die "Error: At least two arguments are required in line: $line"
     fi
     if [ -n "$extra_args" ]; then
-        # read -r -a extra_args <<< "$extra_args"
         IFS=$'\n' read -d '' -r -a extra_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$extra_args") || :
     else
         extra_args=()
