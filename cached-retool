@@ -1,0 +1,375 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.8"
+# dependencies = [
+#     "click",
+#     "xxhash",
+#     "colorama",
+# ]
+# ///
+
+"""
+A caching wrapper for retool command that stores processed files based on input content,
+configuration, and command arguments.
+
+This script allows faster subsequent invocations by reusing previously generated
+outputs when inputs haven't changed.
+"""
+
+import click
+import json
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import xxhash
+from colorama import Fore, Style, init as init_colorama
+from pathlib import Path
+from typing import List, Optional, Tuple, Literal
+
+# Default logging level is INFO
+DEFAULT_LOG_LEVEL = logging.INFO
+
+# Color mode type
+ColorMode = Literal['auto', 'always', 'never']
+
+def should_use_colors(color_mode: ColorMode, stream=None) -> bool:
+    """
+    Determine if color output should be used based on the specified mode and stream.
+
+    Args:
+        color_mode: The color mode setting ('auto', 'always', or 'never')
+        stream: The output stream to check if it supports colors (in auto mode)
+
+    Returns:
+        bool: True if colors should be used, False otherwise.
+    """
+    if color_mode == 'always':
+        return True
+    elif color_mode == 'never':
+        return False
+    else:  # auto mode
+        # Disable colors if NO_COLOR environment variable is set (regardless of value)
+        if os.environ.get('NO_COLOR') is not None:
+            return False
+
+        # Disable colors if the stream is not a terminal
+        if stream is not None and not hasattr(stream, 'isatty'):
+            return False
+        if stream is not None and hasattr(stream, 'isatty') and not stream.isatty():
+            return False
+
+        return True
+
+# Custom stream handler that applies colors based on stream capabilities
+class ColoredStreamHandler(logging.StreamHandler):
+    COLORS = {
+        logging.DEBUG: Fore.CYAN,
+        logging.INFO: Fore.GREEN,
+        logging.WARNING: Fore.YELLOW,
+        logging.ERROR: Fore.RED,
+        logging.CRITICAL: Fore.MAGENTA + Style.BRIGHT
+    }
+
+    def __init__(self, stream=None, color_mode='auto'):
+        super().__init__(stream)
+        self.color_mode = color_mode
+
+    def format(self, record):
+        # Get the original formatted message from the formatter
+        msg = super().format(record)
+
+        # Add color if appropriate for this stream and level
+        if should_use_colors(self.color_mode, self.stream) and record.levelno in self.COLORS:
+            color = self.COLORS[record.levelno]
+            msg = f"{color}{msg}{Style.RESET_ALL}"
+
+        return msg
+
+# Create and configure custom formatter and logger
+def configure_logging(verbosity_level: int, color_mode: ColorMode):
+    """
+    Configure logging based on verbosity level with custom formatting and optional colors.
+
+    Args:
+        verbosity_level: An integer representing the verbosity level.
+            Negative values increase quietness, positive values increase verbosity.
+        color_mode: When to use color in output ('auto', 'always', or 'never')
+    """
+    # Calculate log level based on verbosity
+    log_level = DEFAULT_LOG_LEVEL - (verbosity_level * 10)
+    log_level = max(logging.DEBUG, min(logging.CRITICAL, log_level))
+
+    # Get the root logger and set its level
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    # Clear existing handlers
+    if logger.handlers:
+        logger.handlers.clear()
+
+    # Create console handler with color support based on stream capabilities
+    console_handler = ColoredStreamHandler(stream=sys.stdout, color_mode=color_mode)
+    console_handler.setLevel(log_level)
+
+    # Create a formatter without the root prefix
+    formatter = logging.Formatter('%(levelname)s: %(message)s')
+    console_handler.setFormatter(formatter)
+
+    # Add the handler to the logger
+    logger.addHandler(console_handler)
+
+    logging.debug(f"Logging level set to: {logging.getLevelName(log_level)}")
+
+def get_cache_dir() -> Path:
+    """
+    Get the cache directory based on XDG specification.
+
+    Returns:
+        Path: The path to the retool cache directory, created if it doesn't exist.
+    """
+    cache_home = os.environ.get('XDG_CACHE_HOME', '')
+    if cache_home:
+        base_cache_dir = Path(cache_home)
+    else:
+        base_cache_dir = Path.home() / '.cache'
+
+    cache_dir = base_cache_dir / 'retool-cache'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+def compute_cache_key(input_path: Path, config_path: Optional[Path], additional_args: Tuple[str, ...]) -> str:
+    """
+    Compute a cache key based on input file content, config file content, and command arguments.
+
+    Args:
+        input_path: Path to the input file.
+        config_path: Optional path to the config file.
+        additional_args: Additional command line arguments passed to retool.
+
+    Returns:
+        str: A hexadecimal hash string that uniquely identifies this combination of inputs.
+    """
+    # Create a hash object for the cache key
+    hasher = xxhash.xxh64()
+
+    # Add input file content to the hash
+    with open(input_path, 'rb') as f:
+        hasher.update(f.read())
+
+    # Add config file content to the hash if it exists
+    if config_path:
+        with open(config_path, 'rb') as f:
+            hasher.update(f.read())
+
+    # Add command arguments to the hash
+    args_str = json.dumps(additional_args, sort_keys=True)
+    hasher.update(args_str.encode())
+
+    return hasher.hexdigest()
+
+def process_file(
+    input_path: Path,
+    output_path: Path,
+    config_path: Optional[Path] = None,
+    additional_args: Tuple[str, ...] = (),
+    use_cache: bool = True
+) -> bool:
+    """
+    Run the retool command on the input file and copy the output .dat file.
+
+    Args:
+        input_path: Path to the input file to process.
+        output_path: Destination path for the processed output.
+        config_path: Optional configuration file for retool.
+        additional_args: Additional arguments to pass to the retool command.
+        use_cache: If True, check for cached results before processing.
+
+    Returns:
+        bool: True if processing was successful, False otherwise.
+    """
+    logging.debug(f"Input file: {input_path}")
+    logging.debug(f"Output file: {output_path}")
+
+    if config_path:
+        logging.debug(f"Config file: {config_path}")
+
+    if additional_args:
+        logging.debug(f"Additional arguments: {additional_args}")
+
+    # Check cache if enabled
+    if use_cache:
+        cache_key = compute_cache_key(input_path, config_path, additional_args)
+        cache_dir = get_cache_dir()
+        cache_file = cache_dir / f"{cache_key}.dat"
+
+        if cache_file.exists():
+            logging.debug(f"Using cached file: {cache_file}")
+            output_path.unlink(missing_ok=True)
+            shutil.copy(cache_file, output_path)
+            logging.info(f"Saved output file to: {output_path}")
+            return True
+        else:
+            logging.debug("No cache entry found, processing file")
+
+    # Create a temporary directory
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        logging.debug(f"Temporary directory created at: {temp_path}")
+
+        # Construct the retool command
+        command = ['retool', str(input_path), '--output', str(temp_path)]
+
+        # Add config file if provided
+        if config_path:
+            command.extend(['--config', str(config_path)])
+
+        # Add any additional arguments
+        command.extend(additional_args)
+
+        logging.debug(f"Running command: {' '.join(command)}")
+
+        # Run the retool command
+        try:
+            subprocess.run(command, cwd=temp_path, check=True)
+            logging.debug("Retool command executed successfully.")
+
+            # Find the output .dat file in the temporary directory
+            dat_files = list(temp_path.glob('*.dat'))
+
+            if dat_files:
+                # Just take the first .dat file found
+                output_dat_file = dat_files[0]
+
+                # Save to cache if enabled
+                if use_cache:
+                    cache_key = compute_cache_key(input_path, config_path, additional_args)
+                    cache_dir = get_cache_dir()
+                    cache_file = cache_dir / f"{cache_key}.dat"
+
+                    # Save the output file to cache
+                    cache_file.unlink(missing_ok=True)
+                    shutil.copy(output_dat_file, cache_file)
+                    logging.debug(f"Cached output as: {cache_file}")
+
+                # Copy to the output path
+                output_path.unlink(missing_ok=True)
+                shutil.copy(output_dat_file, output_path)
+                logging.info(f"Saved output file to: {output_path}")
+
+                return True
+            else:
+                logging.error("No .dat files found in the temporary directory.")
+                # List all files in the temp directory for debugging
+                logging.debug(f"Files in temp directory: {[f.name for f in temp_path.iterdir()]}")
+                return False
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Retool command failed with error: {e}")
+            return False
+
+# Click option callback to validate color mode
+def validate_color_mode(ctx, param, value):
+    if value not in ['auto', 'always', 'never']:
+        raise click.BadParameter("Color mode must be one of: auto, always, never")
+    return value
+
+@click.command()
+@click.argument('input_filename', type=click.Path(exists=True))
+@click.argument('output_filename', type=click.Path(), required=False)
+@click.option('--config', '-c', type=click.Path(exists=True), help='Path to the retool config file')
+@click.option('--no-cache', is_flag=True, help='Disable caching of results')
+@click.option('--verbose', '-v', count=True, help='Increase verbosity (can be used multiple times)')
+@click.option('--quiet', '-q', count=True, help='Decrease verbosity (can be used multiple times)')
+@click.option('--dry-run', '-n', is_flag=True, help='Simulate execution without running retool or writing files')
+@click.option('--color', type=click.Choice(['auto', 'always', 'never']), default='auto',
+              help='When to use color output: auto, always, or never (default: auto)',
+              callback=validate_color_mode)
+@click.argument('additional_args', nargs=-1)
+def run_retool(input_filename, output_filename, config, no_cache, verbose, quiet, dry_run, color, additional_args):
+    """
+    Run the retool command on the input file and cache results for future use.
+
+    This command wraps the retool utility, providing caching functionality to speed up
+    repeated operations on the same inputs. It processes the input file using retool and
+    copies the output .dat file to the specified output location.
+
+    Args:
+        input_filename: Path to the input file to process.
+        output_filename: Optional path to save the processed output.
+        config: Optional path to retool configuration file.
+        no_cache: If set, disable result caching.
+        verbose: Increase verbosity level (can be used multiple times).
+        quiet: Decrease verbosity level (can be used multiple times).
+        dry_run: If set, simulate execution without actually running retool or writing files.
+        color: When to use color output: 'auto', 'always', or 'never'.
+        additional_args: Additional arguments to pass to retool.
+    """
+    # Initialize colorama (will only strip colors if needed)
+    should_strip = not should_use_colors(color, sys.stdout)
+    init_colorama(strip=should_strip)
+
+    # Calculate verbosity level: verbose increases, quiet decreases
+    verbosity_level = verbose - quiet
+
+    # Configure logging based on verbosity level
+    configure_logging(verbosity_level, color)
+
+    if should_use_colors(color, sys.stdout):
+        logging.debug("Color output enabled")
+    else:
+        logging.debug("Color output disabled")
+
+    input_path = Path(input_filename).absolute()
+    config_path = Path(config).absolute() if config else None
+
+    if not output_filename:
+        output_filename = f"{input_path.stem}-retooled.dat"
+
+    output_path = Path(output_filename).absolute()
+
+    if dry_run:
+        logging.info("DRY RUN MODE: Simulating execution without running retool or writing files")
+
+        # Construct the command that would be run
+        command = ['retool', str(input_path)]
+        if config_path:
+            command.extend(['--config', str(config_path)])
+        command.extend(additional_args)
+
+        # Check if we would use cache
+        use_cache = not no_cache
+        if use_cache:
+            cache_key = compute_cache_key(input_path, config_path, additional_args)
+            cache_dir = get_cache_dir()
+            cache_file = cache_dir / f"{cache_key}.dat"
+
+            if cache_file.exists():
+                logging.debug(f"Would use cached file: {cache_file}")
+                logging.info(f"Would save output file to: {output_path}")
+            else:
+                logging.debug(f"No cache entry found, would process file with: {' '.join(command)}")
+                logging.debug(f"Would save output to: {output_path}")
+                if use_cache:
+                    logging.debug(f"Would cache result as: {cache_file}")
+        else:
+            logging.debug(f"Would process file with: {' '.join(command)}")
+            logging.info(f"Would save output file to: {output_path}")
+
+        return True
+    else:
+        success = process_file(
+            input_path=input_path,
+            output_path=output_path,
+            config_path=config_path,
+            additional_args=additional_args,
+            use_cache=not no_cache
+        )
+
+        if not success:
+            exit(1)
+
+if __name__ == '__main__':
+    run_retool()
