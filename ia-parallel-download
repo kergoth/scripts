@@ -1,0 +1,268 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "appdirs",
+#     "click",
+# ]
+# ///
+"""
+ia-parallel-download
+
+A light wrapper around 'ia download' to support parallel downloading
+of Internet Archive items via 'aria2c', while preserving archive structure.
+
+Usage:
+    ./ia-parallel-download [OPTIONS] <identifier>...
+
+Example:
+    ./ia-parallel-download nasa-raw-voyager-data other-id -g "*.jpg" -f JPG -d downloads -v --color=always
+"""
+
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional
+from urllib.parse import unquote
+
+import click
+
+# Constants
+IA_CMD = "ia"
+ARIA2C_CMD = "aria2c"
+
+# Color mapping for log levels
+LEVEL_COLOR = {
+    logging.DEBUG: 'blue',
+    logging.INFO: None,
+    logging.WARNING: 'yellow',
+    logging.ERROR: 'red',
+    logging.CRITICAL: 'red',
+}
+
+class ClickFormatter(logging.Formatter):
+    """Logging Formatter to add colors via click.style if enabled."""
+    def __init__(self, fmt: str, color: bool):
+        super().__init__(fmt)
+        self.color = color
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        if self.color:
+            color = LEVEL_COLOR.get(record.levelno)
+            if color:
+                message = click.style(message, fg=color)
+        return message
+
+@dataclass
+class DownloadTask:
+    """Represents a single file to be downloaded."""
+    url: str
+    local_path: Path
+
+
+def configure_logging(verbose_level: int, quiet_level: int, color_mode: str) -> None:
+    """
+    Configure the root logger with verbosity and color settings.
+    """
+    # Determine if color is enabled
+    no_color = 'NO_COLOR' in os.environ
+    is_a_tty = sys.stdout.isatty()
+    if color_mode == 'always':
+        color_enabled = True
+    elif color_mode == 'never' or no_color:
+        color_enabled = False
+    else:  # auto
+        color_enabled = is_a_tty
+
+    # Calculate log level
+    base_level = logging.INFO
+    level = base_level - (verbose_level * 10) + (quiet_level * 10)
+    level = max(logging.DEBUG, min(logging.ERROR, level))
+
+    # Setup handler
+    handler = logging.StreamHandler()
+    formatter = ClickFormatter(fmt='%(message)s', color=color_enabled)
+    handler.setFormatter(formatter)
+
+    # Configure root logger
+    logger = logging.getLogger()
+    logger.setLevel(level)
+    logger.handlers.clear()
+    logger.addHandler(handler)
+
+
+def run_command(cmd: List[str], capture_output: bool = False) -> subprocess.CompletedProcess:
+    """Run a command and optionally capture its output."""
+    logging.debug("Running command: %s", cmd)
+    return subprocess.run(
+        cmd,
+        check=True,
+        text=True,
+        capture_output=capture_output,
+    )
+
+
+def verify_dependency(cmd: str) -> None:
+    """Ensure a required CLI tool is available."""
+    if not shutil.which(cmd):
+        logging.error("Required tool '%s' not found in PATH.", cmd)
+        sys.exit(1)
+
+
+def list_download_urls(
+    identifier: str,
+    glob: Optional[str] = None,
+    formats: Optional[List[str]] = None,
+) -> List[str]:
+    """Use 'ia download -d' to get the list of direct file URLs for an identifier."""
+    cmd = [IA_CMD, 'download', identifier, '-d']
+    if glob:
+        cmd += ['-g', glob]
+    if formats:
+        for fmt in formats:
+            cmd += ['-f', fmt]
+    result = run_command(cmd, capture_output=True)
+    return result.stdout.strip().splitlines()
+
+
+def extract_path_from_url(identifier: str, url: str) -> Path:
+    """Extract and URL-decode archive-relative path from URL."""
+    marker = f"/download/{identifier}/"
+    idx = url.find(marker)
+    if idx == -1:
+        raise ValueError(f"Unexpected URL format: {url}")
+    encoded = url[idx + len(marker):]
+    decoded = unquote(encoded)
+    return Path(decoded)
+
+
+def generate_download_tasks(
+    identifier: str,
+    dest: Path,
+    urls: List[str],
+) -> List[DownloadTask]:
+    """Prepare download tasks from URLs for an identifier."""
+    tasks: List[DownloadTask] = []
+    for url in urls:
+        rel = extract_path_from_url(identifier, url)
+        full = dest / identifier / rel
+        tasks.append(DownloadTask(url=url, local_path=full))
+    return tasks
+
+
+def create_aria2c_input(
+    tasks: List[DownloadTask],
+    input_file: Path,
+) -> None:
+    """Create aria2c input file listing URLs and output paths."""
+    with input_file.open('w', encoding='utf-8') as f:
+        for task in tasks:
+            f.write(task.url + '\n')
+            f.write(f"  dir={task.local_path.parent}\n")
+            f.write(f"  out={task.local_path.name}\n\n")
+
+
+@click.command()
+@click.argument('identifiers', nargs=-1)
+@click.option('--dest', '-d', 'dest', type=click.Path(file_okay=False, dir_okay=True, writable=True, path_type=Path),
+              default=Path.cwd(), help='Destination directory (default: current directory)')
+@click.option('--workers', '-w', 'workers', type=int, default=5, help='Number of parallel downloads (default: 5)')
+@click.option('--glob', '-g', 'glob_pattern', type=str, default=None,
+              help='Glob pattern to filter files (passed to ia download -g)')
+@click.option('--formats', '-f', 'formats', type=str, multiple=True,
+              help='Specify file formats to download (passed to ia download -f). Can be used multiple times.')
+@click.option('--max-tries', '-t', 'max_tries', type=int, default=5, help='Maximum retries for failed downloads (default: 5)')
+@click.option('--dry-run', '-n', 'dry_run', is_flag=True, default=False,
+              help='Show what would be done without downloading')
+@click.option('--verbose', '-v', 'verbose_level', count=True,
+              help='Increase verbosity (can use multiple times)')
+@click.option('--quiet', '-q', 'quiet_level', count=True,
+              help='Decrease verbosity (can use multiple times)')
+@click.option('--color', 'color_mode', type=click.Choice(['auto','always','never']), default='auto',
+              help='Colorize output: auto, always, or never')
+def main(
+    identifiers: List[str],
+    dest: Path,
+    workers: int,
+    glob_pattern: Optional[str],
+    formats: List[str],
+    max_tries: int,
+    dry_run: bool,
+    verbose_level: int,
+    quiet_level: int,
+    color_mode: str,
+) -> None:
+    """
+    Parallel download of multiple Internet Archive items using aria2c in one batch.
+
+    IDENTIFIERS are zero or more Internet Archive item identifiers.
+    """
+    # Configure logging separately
+    configure_logging(verbose_level, quiet_level, color_mode)
+
+    if not identifiers:
+        return
+
+    verify_dependency(IA_CMD)
+    verify_dependency(ARIA2C_CMD)
+
+    all_tasks: List[DownloadTask] = []
+    for identifier in identifiers:
+        logging.info("Processing identifier '%s'...", identifier)
+        urls = list_download_urls(identifier, glob=glob_pattern, formats=formats)
+        if not urls:
+            logging.warning("No matching files found for '%s'", identifier)
+            continue
+        logging.info("Found %d files for '%s'", len(urls), identifier)
+        all_tasks.extend(generate_download_tasks(identifier, dest, urls))
+
+    if not all_tasks:
+        logging.info("No files to download. Exiting.")
+        return
+
+    if dry_run:
+        logging.info("Dry-run mode. The following tasks would be performed:")
+        for task in all_tasks:
+            logging.info("%s -> %s", task.url, task.local_path)
+        return
+
+    with tempfile.NamedTemporaryFile(prefix='ia_parallel_', suffix='.txt', delete=False) as tmpf:
+        input_path = Path(tmpf.name)
+    logging.debug("Generating combined aria2c input file at %s", input_path)
+    create_aria2c_input(all_tasks, input_path)
+
+    logging.info("Starting parallel download via aria2c for all identifiers...")
+    try:
+        run_command([
+            ARIA2C_CMD,
+            '--input-file', str(input_path),
+            '--max-concurrent-downloads', str(workers),
+            '--split', '5',
+            '--continue',
+            '--max-tries', str(max_tries),
+            '--retry-wait', '5',
+            '--auto-file-renaming=false',
+            '--summary-interval', '5',
+            '--console-log-level', 'warn',
+        ])
+        logging.info("All downloads completed successfully.")
+    except subprocess.CalledProcessError as e:
+        logging.error("Download failed: %s", e)
+        sys.exit(1)
+    finally:
+        try:
+            input_path.unlink()
+            logging.debug("Temporary input file removed.")
+        except Exception as e:
+            logging.warning("Could not delete temp file %s: %s", input_path, e)
+
+
+if __name__ == '__main__':
+    main()
