@@ -83,8 +83,12 @@ msg_debug() {
     fi
 }
 
-die() {
+msg_error() {
     msg_red "$@"
+}
+
+die() {
+    msg_error "$@"
     exit 1
 }
 
@@ -189,8 +193,13 @@ set_archive_cmds() {
                 else
                     z_verbosity=$verbosity
                 fi
-                list_cmd=(7z l)
-                unpack_cmd=(7z "-bb$z_verbosity" x -o"$unpack_dir")
+                if { [ "$is_dest" = 1 ] && run_dest command -v 7zr &>/dev/null; } || { [ "$is_dest" = 0 ] && run_src command -v 7zr &>/dev/null; }; then
+                    list_cmd=(7zr l)
+                    unpack_cmd=(7zr "-bb$z_verbosity" x -o"$unpack_dir")
+                else
+                    list_cmd=(7z l)
+                    unpack_cmd=(7z "-bb$z_verbosity" x -o"$unpack_dir")
+                fi
                 ;;
             *.zip)
                 list_cmd=(unzip -l)
@@ -325,18 +334,32 @@ if [ $wildcard -eq 1 ]; then
             src_remote=0
             src_host=
         fi
-        # Expand wildcards in the source path
-        IFS=$'\n' read -d '' -r -a expanded_src_paths_new < <(run_src python3 -c 'import glob; import sys; print("\n".join(glob.glob(sys.argv[1], recursive=True)))' "$src") || :
-        expanded_src_paths+=("${expanded_src_paths_new[@]}")
+        if echo "$src" | grep -q '\*'; then
+            # Expand wildcards in the source path
+            # FIXME: don't use bracket expansion, as I often need brackets in game folder paths
+            IFS=$'\n' read -d '' -r -a expanded_src_paths_new < <(run_src python3 -c 'import glob; import sys; print("\n".join(glob.glob(sys.argv[1], recursive=True)))' "$src") || :
+            if [ "${#expanded_src_paths_new[@]}" -eq 0 ]; then
+                msg_verbose "No source paths found for: $src"
+            else
+                expanded_src_paths+=("${expanded_src_paths_new[@]}")
+            fi
+        elif [ -e "$src" ]; then
+            expanded_src_paths+=("$src")
+        else
+            msg_verbose "Skipping non-existent source path: $src"
+        fi
     done
+
+    if [ "${#expanded_src_paths[@]}" -eq 0 ]; then
+        die "Error: No source paths found: ${src_paths[*]}"
+    fi
+
     src_paths=("${expanded_src_paths[@]}")
 fi
 
 rsync_opts=(
     -rlptD
     --human-readable
-    --copy-links
-    --hard-links
     --compress
     --exclude=.git
     --exclude=.DS_Store
@@ -531,9 +554,13 @@ if [[ $compressed_inputs -eq 1 ]]; then
                         | tr '\n' '\0' \
                         | run_dest xargs -0 -I"{}" mv "{}" "$tmp_path/"
                     run_dest rm -rf "$single_dir"
+                else
+                    run_dest mv "$unpack_tmp"/* "$tmp_path/"
+                    run_dest rm -f "$unpack_tmp/.DS_Store" "$unpack_tmp"/._*
                 fi
             else
                 run_dest mv "$unpack_tmp"/* "$tmp_path/"
+                run_dest rm -f "$unpack_tmp/.DS_Store" "$unpack_tmp"/._*
             fi
             run_dest rmdir "$unpack_tmp"
         elif [ $src_remote -eq 1 ]; then
@@ -574,6 +601,11 @@ else
             run_dest mkdir -p "$(dirname "$dest_path")"
             ;;
     esac
+
+    if [ "${#src_paths[@]}" -eq 0 ]; then
+        die "No source paths specified"
+    fi
+
     if [[ $dest_remote -eq 0 ]] && [[ $hard_link -eq 1 ]]; then
         for src in "${src_paths[@]}"; do
             if [[ $src =~ /$ ]]; then
