@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ia metadata "$@" |
-    jq '.metadata + {filesize_str: ([.files[] | select(.size) | .size | tonumber] | add | if . < 1024 then . + " B" elif . < 1048576 then (. / 1024) | tostring + " KB" elif . < 1073741824 then (. / 1048576) | tostring + " MB" else (. / 1073741824) | tostring + " GB" end)}' |
+    jq '.metadata + {filesize_str: ([.files[] | select(.size) | .size | tonumber] | add | if . < 1024 then .*100 | round / 100 | tostring + " B" elif . < 1048576 then (. / 1024) | .*100 | round / 100 | tostring + " KB" elif . < 1073741824 then (. / 1048576) | .*100 | round / 100 | tostring + " MB" else (. / 1073741824) | .*100 | round / 100 | tostring + " GB" end)}' |
     if [ -t 1 ] && command -v bat &>/dev/null; then
         bat -l json
     else
