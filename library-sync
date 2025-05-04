@@ -209,6 +209,17 @@ run() {
     return $ret
 }
 
+run_always() {
+    local ret=0
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        printf '❯ %s\n' "$(printcmd "$@")" >&2
+    fi
+    suppress_int=1
+    ( trap - INT EXIT TERM; exec "$@" ) &
+    wait $! || ret=$?
+    return $ret
+}
+
 run_libsync() {
     local paths=()
     for arg; do
@@ -257,7 +268,7 @@ run_libsync() {
         set -- -uswC ${dry_run:+-n} "${libsync_opts[@]}" "${src_paths[@]}" "$sync_dest"
     fi
 
-    run libsync "$@" </dev/null
+    run_always libsync "$@" </dev/null
 }
 
 

@@ -97,19 +97,19 @@ should_die() {
     local msg=${1:-}
 
     case $ret in
-        130)
-            msg_red "${msg:+$msg, }Interrupted"
-            kill -INT $$
-            ;;
-        0) ;;
-        *)
-            if [ -n "${continue_on_error:-}" ]; then
-                msg_yellow "Error: ${msg:+$msg, }Continuing after error with exit code $ret"
-                return $ret
-            else
-                die "Error: ${msg:+$msg, }Failed with exit code $ret"
-            fi
-            ;;
+    130)
+        msg_red "${msg:+$msg, }Interrupted"
+        kill -INT $$
+        ;;
+    0) ;;
+    *)
+        if [ -n "${continue_on_error:-}" ]; then
+            msg_yellow "Error: ${msg:+$msg, }Continuing after error with exit code $ret"
+            return $ret
+        else
+            die "Error: ${msg:+$msg, }Failed with exit code $ret"
+        fi
+        ;;
     esac
 }
 
@@ -120,6 +120,17 @@ run() {
     if [ "${dry_run:-0}" != "1" ]; then
         "$@" || return $?
     fi
+}
+
+run_always() {
+    local ret=0
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        printf '❯ %s\n' "$(printcmd "$@")" >&2
+    fi
+    suppress_int=1
+    ( trap - INT EXIT TERM; exec "$@" ) &
+    wait $! || ret=$?
+    return $ret
 }
 
 run_remote() {
@@ -134,8 +145,8 @@ run_remote() {
         cat /dev/null
     else
         cat
-    fi \
-        | run ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
+    fi |
+        run ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
 }
 
 run_remote_quiet() {
@@ -145,8 +156,8 @@ run_remote_quiet() {
         cat /dev/null
     else
         cat
-    fi \
-        | ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
+    fi |
+        ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
 }
 
 run_dest() {
@@ -179,47 +190,47 @@ set_archive_cmds() {
     if { [ "$is_dest" = 1 ] && run_dest test -f "$archive_file"; } || { [ "$is_dest" = 0 ] && run_src test -f "$archive_file"; }; then
         if { [ "$is_dest" = 1 ] && [ "$dest_has_unar" = 1 ]; } || { [ "$is_dest" = 0 ] && [ "$src_has_unar" = 1 ]; }; then
             case "$archive_file" in
-            *.7z|*.zip|*.tar.gz|*.tar.bz2|*.tar.xz)
+            *.7z | *.zip | *.tar.gz | *.tar.bz2 | *.tar.xz)
                 list_cmd=(lsar)
                 unpack_cmd=(unar -D -o "$unpack_dir")
                 return 0
-            ;;
+                ;;
             esac
         fi
         case "$archive_file" in
-            *.7z)
-                if [ $verbosity -gt 3 ]; then
-                    z_verbosity=3
-                else
-                    z_verbosity=$verbosity
-                fi
-                if { [ "$is_dest" = 1 ] && run_dest command -v 7zr &>/dev/null; } || { [ "$is_dest" = 0 ] && run_src command -v 7zr &>/dev/null; }; then
-                    list_cmd=(7zr l)
-                    unpack_cmd=(7zr "-bb$z_verbosity" x -o"$unpack_dir")
-                else
-                    list_cmd=(7z l)
-                    unpack_cmd=(7z "-bb$z_verbosity" x -o"$unpack_dir")
-                fi
-                ;;
-            *.zip)
-                list_cmd=(unzip -l)
-                unpack_cmd=(unzip -q -o -d "$unpack_dir")
-                ;;
-            *.tar.gz)
-                list_cmd=(tar -tzf)
-                unpack_cmd=(tar -xz -C "$unpack_dir" -f)
-                ;;
-            *.tar.bz2)
-                list_cmd=(tar -tzf)
-                unpack_cmd=(tar -xj -C "$unpack_dir" -f)
-                ;;
-            *.tar.xz)
-                list_cmd=(tar -tzf)
-                unpack_cmd=(tar -xJ -C "$unpack_dir" -f)
-                ;;
-            *)
-                return 1
-                ;;
+        *.7z)
+            if [ $verbosity -gt 3 ]; then
+                z_verbosity=3
+            else
+                z_verbosity=$verbosity
+            fi
+            if { [ "$is_dest" = 1 ] && run_dest command -v 7zr &>/dev/null; } || { [ "$is_dest" = 0 ] && run_src command -v 7zr &>/dev/null; }; then
+                list_cmd=(7zr l)
+                unpack_cmd=(7zr "-bb$z_verbosity" x -o"$unpack_dir")
+            else
+                list_cmd=(7z l)
+                unpack_cmd=(7z "-bb$z_verbosity" x -o"$unpack_dir")
+            fi
+            ;;
+        *.zip)
+            list_cmd=(unzip -l)
+            unpack_cmd=(unzip -q -o -d "$unpack_dir")
+            ;;
+        *.tar.gz)
+            list_cmd=(tar -tzf)
+            unpack_cmd=(tar -xz -C "$unpack_dir" -f)
+            ;;
+        *.tar.bz2)
+            list_cmd=(tar -tzf)
+            unpack_cmd=(tar -xj -C "$unpack_dir" -f)
+            ;;
+        *.tar.xz)
+            list_cmd=(tar -tzf)
+            unpack_cmd=(tar -xJ -C "$unpack_dir" -f)
+            ;;
+        *)
+            return 1
+            ;;
         esac
     else
         return 1
@@ -247,8 +258,8 @@ checksum_src_paths() {
             else
                 msg_verbose "Calculating checksum for $src_path"
                 chksum=$(run_src sha1sum "$src_path" | cut -d" " -f1)
-                echo "$chksum $src_path" \
-                    | if [ $cache_checksums -eq 1 ]; then
+                echo "$chksum $src_path" |
+                    if [ $cache_checksums -eq 1 ]; then
                         mkdir -p "$src_dir/.sha1"
                         run_src tee "$src_dir/.sha1/$src_file.sha1"
                     else
@@ -276,30 +287,30 @@ verbosity=0
 
 while getopts "CVHuUcswSDnvqh" opt; do
     case $opt in
-        C) cache_checksums=1 ;;
-        V) validate_checksums=1 ;;
-        H) hard_link=1 ;;
-        u) uncompress=1 ;;
-        U)
-            force_uncompress=1
-            uncompress=1
-            ;;
-        c) hoist=1 ;;
-        s) stamp=1 ;;
-        w) wildcard=1 ;;
-        S) src_root=$OPTARG ;;
-        D) dest_root=$OPTARG ;;
-        n) dry_run=1 ;;
-        v) verbosity=$((verbosity + 1)) ;;
-        q) verbosity=$((verbosity - 1)) ;;
-        h)
-            show_help
-            exit 0
-            ;;
-        *)
-            show_help
-            exit 1
-            ;;
+    C) cache_checksums=1 ;;
+    V) validate_checksums=1 ;;
+    H) hard_link=1 ;;
+    u) uncompress=1 ;;
+    U)
+        force_uncompress=1
+        uncompress=1
+        ;;
+    c) hoist=1 ;;
+    s) stamp=1 ;;
+    w) wildcard=1 ;;
+    S) src_root=$OPTARG ;;
+    D) dest_root=$OPTARG ;;
+    n) dry_run=1 ;;
+    v) verbosity=$((verbosity + 1)) ;;
+    q) verbosity=$((verbosity - 1)) ;;
+    h)
+        show_help
+        exit 0
+        ;;
+    *)
+        show_help
+        exit 1
+        ;;
     esac
 done
 shift $((OPTIND - 1))
@@ -406,8 +417,8 @@ else
 fi
 if [[ -n "$dest_root" ]]; then
     case "$dest_path" in
-        /*) ;;
-        *) dest_path="$dest_root/$dest_path" ;;
+    /*) ;;
+    *) dest_path="$dest_root/$dest_path" ;;
     esac
 fi
 
@@ -425,11 +436,11 @@ for i in "${!src_paths[@]}"; do
     fi
     if [[ -n "$src_root" ]]; then
         case "$src" in
-            /*) ;;
-            *)
-                src="$src_root/$src"
-                src_paths[i]="${src_host:+$src_host:}$src"
-                ;;
+        /*) ;;
+        *)
+            src="$src_root/$src"
+            src_paths[i]="${src_host:+$src_host:}$src"
+            ;;
         esac
     fi
     if ! run_src test -e "$src"; then
@@ -462,144 +473,148 @@ dest_has_unar=0
 # folder to gather the files, in the specified source order, prior to moving them to the destination.
 # If not, a single rsync directly to the destination should be sufficient.
 if [[ $compressed_inputs -eq 1 ]]; then
-    if run_src command -v unar &>/dev/null; then
-        src_has_unar=1
-    fi
-    if run_dest command -v unar &>/dev/null; then
-        dest_has_unar=1
-    fi
-    if [[ $stamp -eq 1 ]]; then
-        # If there are no directory inputs, compare the compressed file input timestamps against
-        # a dest timestamp '.unpacked' file in the directory destination, and skip the unpacking if
-        # the compressed files are older than the '.unpacked' file.
-        if [[ $directory_inputs -eq 0 ]] && [[ $dry_run -eq 0 ]] && [[ $force_uncompress -eq 0 ]]; then
-            dest_mtime=$(run_dest stat -c %Y "$dest_path/.unpacked" 2>/dev/null || echo 0) || true
-            if [ "$dest_mtime" = 0 ]; then
-                to_update=1
-            else
-                to_update=0
-                for src in "${src_paths[@]}"; do
-                    if [[ "$src" == *:* ]]; then
-                        src_remote=1
-                        src_host="${src%%:*}"
-                        src="${src#*:}"
-                    else
-                        src_remote=0
-                        src_host=
-                    fi
-                    if run_src test -f "$src" && set_archive_cmds "$src" .; then
-                        src_mtime=$(run_src stat -c %Y "$src" || echo 0)
-                        if [ "${src_mtime:-0}" -gt "${dest_mtime:-0}" ]; then
-                            to_update=1
+    if [[ $dry_run -eq 1 ]]; then
+        msg_debug "Uncompressing compressed inputs to $dest_path"
+    else
+        if run_src command -v unar &>/dev/null; then
+            src_has_unar=1
+        fi
+        if run_dest command -v unar &>/dev/null; then
+            dest_has_unar=1
+        fi
+        if [[ $stamp -eq 1 ]]; then
+            # If there are no directory inputs, compare the compressed file input timestamps against
+            # a dest timestamp '.unpacked' file in the directory destination, and skip the unpacking if
+            # the compressed files are older than the '.unpacked' file.
+            if [[ $directory_inputs -eq 0 ]] && [[ $dry_run -eq 0 ]] && [[ $force_uncompress -eq 0 ]]; then
+                dest_mtime=$(run_dest stat -c %Y "$dest_path/.unpacked" 2>/dev/null || echo 0) || true
+                if [ "$dest_mtime" = 0 ]; then
+                    to_update=1
+                else
+                    to_update=0
+                    for src in "${src_paths[@]}"; do
+                        if [[ "$src" == *:* ]]; then
+                            src_remote=1
+                            src_host="${src%%:*}"
+                            src="${src#*:}"
+                        else
+                            src_remote=0
+                            src_host=
                         fi
+                        if run_src test -f "$src" && set_archive_cmds "$src" .; then
+                            src_mtime=$(run_src stat -c %Y "$src" || echo 0)
+                            if [ "${src_mtime:-0}" -gt "${dest_mtime:-0}" ]; then
+                                to_update=1
+                            fi
+                        fi
+                    done
+                fi
+
+                if [ $to_update -eq 0 ]; then
+                    msg_verbose "Skipping unpacking, stamp file timestamp is up to date with the inputs"
+                    exit 0
+                fi
+
+                checksum_src_paths "${src_paths[@]}" >"$tmpdir/unpacked.new" 2>/dev/null || true
+                run_dest cat "$dest_path/.unpacked" >"$tmpdir/unpacked" 2>/dev/null || true
+                if cmp -s "$tmpdir/unpacked" "$tmpdir/unpacked.new"; then
+                    msg_verbose "Skipping unpacking, no changes detected"
+                    exit 0
+                fi
+            fi
+
+            if run_dest test -f "$dest_path/.unpacked"; then
+                if [ "$(run_dest find "$dest_path" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name .unpacked | wc -l | xargs)" -lt 1 ]; then
+                    die "Empty folder at existing unpacked $dest_path"
+                fi
+            fi
+        fi
+
+        msg_debug "Uncompressing compressed inputs to $dest_path"
+        tmp_path=${dest_path%/}.tmp
+        trap 'run_dest rm -rf "$tmp_path"' EXIT
+        run_dest rm -rf "$tmp_path"
+        run_dest mkdir -p "$tmp_path"
+        for src in "${src_paths[@]}"; do
+            if [[ "$src" == *:* ]]; then
+                src_remote=1
+                src_host="${src%%:*}"
+                src="${src#*:}"
+            else
+                src_remote=0
+                src_host=
+            fi
+
+            unpack_tmp=$(run_dest mktemp -d "$tmp_path/libsync.XXXXXX")
+            if set_archive_cmds "$src" "$unpack_tmp" 0 && run_src "${list_cmd[@]}" "$src" &>/dev/null; then
+                if [ $dest_remote -eq 1 ]; then
+                    run scp "$src" "$dest_host:$tmp_path/"
+                    src="$tmp_path/$(basename "$src")"
+                elif [ $src_remote -eq 1 ]; then
+                    run scp "$src_host:$src" "$tmp_path/"
+                    src="$tmp_path/$(basename "$src")"
+                fi
+                set_archive_cmds "$src" "$unpack_tmp" 1
+                run_dest "${unpack_cmd[@]}" "$src"
+                if [ $dest_remote -eq 1 ] || [ $src_remote -eq 1 ]; then
+                    run_dest rm -f "$tmp_path/$(basename "$src")"
+                fi
+                # If the archive unpacked a single directory, move its contents to the tmp_path root
+                if [ $hoist -eq 1 ] && [ "$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name ._\* | wc -l | xargs)" = 1 ]; then
+                    msg_debug "Hoisting contents of single-directory archive for $src"
+                    single_dir=$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -type d -not -name .DS_Store -not -name ._\*)
+                    if run_dest test -d "$single_dir"; then
+                        run_dest find "$single_dir" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name ._\* |
+                            tr '\n' '\0' |
+                            run_dest xargs -0 -I"{}" mv "{}" "$tmp_path/"
+                        run_dest rm -rf "$single_dir"
+                    else
+                        run_dest mv "$unpack_tmp"/* "$tmp_path/"
+                        run_dest rm -f "$unpack_tmp/.DS_Store" "$unpack_tmp"/._*
                     fi
-                done
-            fi
-
-            if [ $to_update -eq 0 ]; then
-                msg_verbose "Skipping unpacking, stamp file timestamp is up to date with the inputs"
-                exit 0
-            fi
-
-            checksum_src_paths "${src_paths[@]}" >"$tmpdir/unpacked.new" 2>/dev/null || true
-            run_dest cat "$dest_path/.unpacked" >"$tmpdir/unpacked" 2>/dev/null || true
-            if cmp -s "$tmpdir/unpacked" "$tmpdir/unpacked.new"; then
-                msg_verbose "Skipping unpacking, no changes detected"
-                exit 0
-            fi
-        fi
-
-        if run_dest test -f "$dest_path/.unpacked"; then
-            if [ "$(run_dest find "$dest_path" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name .unpacked | wc -l | xargs)" -lt 1 ]; then
-                die "Empty folder at existing unpacked $dest_path"
-            fi
-        fi
-    fi
-
-    msg_debug "Uncompressing compressed inputs to $dest_path"
-    tmp_path=${dest_path%/}.tmp
-    trap 'run_dest rm -rf "$tmp_path"' EXIT
-    run_dest rm -rf "$tmp_path"
-    run_dest mkdir -p "$tmp_path"
-    for src in "${src_paths[@]}"; do
-        if [[ "$src" == *:* ]]; then
-            src_remote=1
-            src_host="${src%%:*}"
-            src="${src#*:}"
-        else
-            src_remote=0
-            src_host=
-        fi
-
-        unpack_tmp=$(run_dest mktemp -d "$tmp_path/libsync.XXXXXX")
-        if set_archive_cmds "$src" "$unpack_tmp" 0 && run_src "${list_cmd[@]}" "$src" &>/dev/null; then
-            if [ $dest_remote -eq 1 ]; then
-                run scp "$src" "$dest_host:$tmp_path/"
-                src="$tmp_path/$(basename "$src")"
-            elif [ $src_remote -eq 1 ]; then
-                run scp "$src_host:$src" "$tmp_path/"
-                src="$tmp_path/$(basename "$src")"
-            fi
-            set_archive_cmds "$src" "$unpack_tmp" 1
-            run_dest "${unpack_cmd[@]}" "$src"
-            if [ $dest_remote -eq 1 ] || [ $src_remote -eq 1 ]; then
-                run_dest rm -f "$tmp_path/$(basename "$src")"
-            fi
-            # If the archive unpacked a single directory, move its contents to the tmp_path root
-            if [ $hoist -eq 1 ] && [ "$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name ._\* | wc -l | xargs)" = 1 ]; then
-                msg_debug "Hoisting contents of single-directory archive for $src"
-                single_dir=$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -type d -not -name .DS_Store -not -name ._\*)
-                if run_dest test -d "$single_dir"; then
-                    run_dest find "$single_dir" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name ._\* \
-                        | tr '\n' '\0' \
-                        | run_dest xargs -0 -I"{}" mv "{}" "$tmp_path/"
-                    run_dest rm -rf "$single_dir"
                 else
                     run_dest mv "$unpack_tmp"/* "$tmp_path/"
                     run_dest rm -f "$unpack_tmp/.DS_Store" "$unpack_tmp"/._*
                 fi
+                run_dest rmdir "$unpack_tmp"
+            elif [ $src_remote -eq 1 ]; then
+                run_dest rmdir "$unpack_tmp"
+                run_dest rsync "${rsync_opts[@]}" "$src_host:$src" "$tmp_path/"
             else
-                run_dest mv "$unpack_tmp"/* "$tmp_path/"
-                run_dest rm -f "$unpack_tmp/.DS_Store" "$unpack_tmp"/._*
+                run_dest rmdir "$unpack_tmp"
+                run_dest rsync "${rsync_opts[@]}" "$src" "$tmp_path/"
             fi
-            run_dest rmdir "$unpack_tmp"
-        elif [ $src_remote -eq 1 ]; then
-            run_dest rmdir "$unpack_tmp"
-            run_dest rsync "${rsync_opts[@]}" "$src_host:$src" "$tmp_path/"
-        else
-            run_dest rmdir "$unpack_tmp"
-            run_dest rsync "${rsync_opts[@]}" "$src" "$tmp_path/"
-        fi
-    done
-    case "$dest_path" in
+        done
+        case "$dest_path" in
         */)
             run_dest mkdir -p "$dest_path"
             ;;
         *)
             run_dest mkdir -p "$(dirname "$dest_path")"
             ;;
-    esac
-    if [[ $hard_link -eq 1 ]]; then
-        run_dest cp -alf "$tmp_path/." "$dest_path" || true
-    fi
+        esac
+        if [[ $hard_link -eq 1 ]]; then
+            run_dest cp -alf "$tmp_path/." "$dest_path" || true
+        fi
 
-    # This is performing a local file copy from a temporary path we're removing
-    # to the destination. Ideally this would just be a move command, or hard
-    # link copy, but in either case we lose the ability to apply rsync's file
-    # exclusions, which is a deal breaker, unless I can apply other exclusions
-    # to the actual unpack commands.
-    run_dest rsync "${rsync_opts[@]}" "$tmp_path/" "$dest_path"
-    if [[ $stamp -eq 1 ]]; then
-        checksum_src_paths "${src_paths[@]}" | run_dest tee "$dest_path/.unpacked" >/dev/null
+        # This is performing a local file copy from a temporary path we're removing
+        # to the destination. Ideally this would just be a move command, or hard
+        # link copy, but in either case we lose the ability to apply rsync's file
+        # exclusions, which is a deal breaker, unless I can apply other exclusions
+        # to the actual unpack commands.
+        run_dest rsync "${rsync_opts[@]}" "$tmp_path/" "$dest_path"
+        if [[ $stamp -eq 1 ]]; then
+            checksum_src_paths "${src_paths[@]}" | run_dest tee "$dest_path/.unpacked" >/dev/null
+        fi
     fi
 else
     case "$dest_path" in
-        */)
-            run_dest mkdir -p "$dest_path"
-            ;;
-        *)
-            run_dest mkdir -p "$(dirname "$dest_path")"
-            ;;
+    */)
+        run_dest mkdir -p "$dest_path"
+        ;;
+    *)
+        run_dest mkdir -p "$(dirname "$dest_path")"
+        ;;
     esac
 
     if [ "${#src_paths[@]}" -eq 0 ]; then
@@ -615,5 +630,5 @@ else
             fi
         done
     fi
-    run rsync "${rsync_opts[@]}" "${src_paths[@]}" "${dest_host:+$dest_host:}$dest_path"
+    run_always rsync "${rsync_opts[@]}" "${src_paths[@]}" "${dest_host:+$dest_host:}$dest_path"
 fi
