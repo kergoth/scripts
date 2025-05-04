@@ -7,6 +7,7 @@ ${0##*/} [options] [CSV_FILE]
 Options:
   -c CATEGORY Filter output by category
   -l LIMIT    Limit the number of entries shown to LIMIT
+  -m MONTHS   Number of months of data, to be used for averaging
   -a          Show totals for each category / all categories
   -i          Show income only
   -e          Show expenses only
@@ -24,7 +25,8 @@ main() {
     expense=0
     yearly=0
     limit=
-    while getopts c:aierl:yh opt; do
+    months=12
+    while getopts c:aierl:m:yh opt; do
         case "$opt" in
             c)
                 category="$OPTARG"
@@ -45,6 +47,9 @@ main() {
                 ;;
             l)
                 limit="$OPTARG"
+                ;;
+            m)
+                months="$OPTARG"
                 ;;
             y)
                 yearly=1
@@ -103,7 +108,7 @@ sql_query() {
         if [ $yearly -eq 1 ]; then
             by_month=
         else
-            by_month="/12"
+            by_month="/$months"
         fi
         if [ $income -eq 1 ]; then
             where='WHERE Inflow > 0'
