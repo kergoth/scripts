@@ -190,7 +190,7 @@ set_archive_cmds() {
     if { [ "$is_dest" = 1 ] && run_dest test -f "$archive_file"; } || { [ "$is_dest" = 0 ] && run_src test -f "$archive_file"; }; then
         if { [ "$is_dest" = 1 ] && [ "$dest_has_unar" = 1 ]; } || { [ "$is_dest" = 0 ] && [ "$src_has_unar" = 1 ]; }; then
             case "$archive_file" in
-            *.7z | *.zip | *.tar.gz | *.tar.bz2 | *.tar.xz)
+            *.7z | *.zip | *.dosz | *.tar.gz | *.tar.bz2 | *.tar.xz)
                 list_cmd=(lsar)
                 unpack_cmd=(unar -D -o "$unpack_dir")
                 return 0
@@ -212,7 +212,7 @@ set_archive_cmds() {
                 unpack_cmd=(7z "-bb$z_verbosity" x -o"$unpack_dir")
             fi
             ;;
-        *.zip)
+        *.zip|*.dosz)
             list_cmd=(unzip -l)
             unpack_cmd=(unzip -q -o -d "$unpack_dir")
             ;;
