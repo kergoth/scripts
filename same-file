@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+if [ $# -eq 0 ]; then
+    exit 0
+fi
+
+read -r inode dev < <(stat -Lc '%i %d' -- "$1") || exit 1
+shift
+
+for p; do
+    read -r i d < <(stat -Lc '%i %d' -- "$p") || exit 1
+    if [ "$i" -ne "$inode" ] || [ "$d" -ne "$dev" ]; then
+        exit 1
+    fi
+done
