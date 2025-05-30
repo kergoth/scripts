@@ -15,16 +15,21 @@ ${0##*/} [options..] [CMD [ARGS..]]
 
 Options:
   -a   Also show non-duplicates
+  -r   Reverse the expected order from <id> <fn> to <fn> <id>.
   -h   Show usage
 END
     exit 2
 }
 
 all=0
-while getopts ah opt; do
+reversed_order=0
+while getopts arh opt; do
     case "$opt" in
         a)
             all=1
+            ;;
+        r)
+            reversed_order=1
             ;;
         \? | h)
             usage
@@ -38,7 +43,10 @@ if echo "$*" | grep -q '{}'; then
 fi
 
 remove_nondupes() {
-    jdupes-oneline | sed -e "s/$TAB*$//" | grep "$TAB" | jdupes-multiline
+    jdupes-oneline |
+        sed -e "s/$TAB*$//" |
+        grep "$TAB" |
+        jdupes-multiline
 }
 
 if [ $# -gt 0 ]; then
@@ -46,12 +54,19 @@ if [ $# -gt 0 ]; then
         | xargs -0 "$@"
 else
     cat
-fi \
-    | grep -v "^ *$TAB" \
-    | sort -t"$TAB" -k1 \
-    | group-by-column 1 "$TAB" \
-    | cut -d"$TAB" -f2- \
-    | if [ $all -eq 1 ]; then
+fi |
+    if [ $reversed_order -eq 1 ]; then
+        grep -v "$TAB *$" |
+        sort -t"$TAB" -k2 |
+        group-by-column 2 "$TAB" |
+        cut -d"$TAB" -f1
+    else
+        grep -v "^ *$TAB" |
+        sort -t"$TAB" -k1 |
+        group-by-column 1 "$TAB" |
+        cut -d"$TAB" -f2-
+    fi |
+    if [ $all -eq 1 ]; then
         cat
     else
         remove_nondupes
