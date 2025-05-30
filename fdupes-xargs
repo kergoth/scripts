@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+jdupes-oneline |
+    while read -r line; do
+        IFS=$'\t' read -d '' -r -a files < <(echo "$line" | sed -e 's/\\ / /g' | tr -d '\n') || :
+        for file in "${files[@]}"; do
+            echo "$file"
+        done |
+            tr '\n' '\0' |
+            xargs -0 "$@"
+    done
