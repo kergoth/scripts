@@ -13,4 +13,4 @@ if echo "${OSTYPE:-}" | grep -q "^darwin"; then
 fi
 
 set -x
-distrobox create --pre-init-hooks "apk add opendoas && (grep -q 'permit $USER' /etc/doas.conf || echo 'permit $USER' >> /etc/doas.conf)" --image docker.io/chimeralinux/chimera "$@"
+distrobox create --pre-init-hooks "apk add mount opendoas && (grep -q 'permit $USER' /etc/doas.conf || echo 'permit $USER' >> /etc/doas.conf)" --image docker.io/chimeralinux/chimera "$@"
