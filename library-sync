@@ -383,63 +383,87 @@ read_config_file() {
         done
 }
 
-read_config_file "$config_file" >"$tmpdir/lines"
+read_config_line () {
+    local entry extra
+    local argvar="$1"
+    local extraargvar="$2"
 
-failed=0
-while IFS=$'\t' read -r entry extra_args; do
+    # shellcheck disable=SC2229
+    IFS=$'\t' read -r entry extra || return $?
+
     # We handle quoted arguments, etc here, but leave any wildcards to the libsync script.
     # This also avoids any use of eval.
-    IFS=$'\n' read -d '' -r -a src_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$entry") || :
+    IFS=$'\n' read -d '' -r -a "$argvar" < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$entry") || :
 
+    if [ -n "$extra" ]; then
+        IFS=$'\n' read -d '' -r -a "$extraargvar" < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$extra") || :
+    fi
+}
+
+test_path() {
+    local invert
+    local check_path="$1"
+    local dest_path="$2"
+
+    case "$check_path" in
+    '!'*)
+        invert=1
+        ;;
+    *)
+        invert=0
+        ;;
+    esac
+
+    case "$check_path" in
+    /*) ;;
+    *)
+        check_path="$dest_path/$check_path"
+        ;;
+    esac
+    if [ $invert -eq 1 ]; then
+        if run_dest test -e "$check_path"; then
+            return 1
+        fi
+    else
+        if ! run_dest test -e "$check_path"; then
+            return 2
+        fi
+    fi </dev/null
+    return 0
+}
+
+failed=0
+src_args=()
+extra_args=()
+
+read_config_file "$config_file" >"$tmpdir/config"
+while read_config_line src_args extra_args; do
     if [ $conditional_mode -eq 1 ]; then
-        if [ ${#src_args[@]} -lt 3 ]; then
-            die "Error: At least three arguments are required in conditional entry: $entry"
-        fi
-
         check_path="${src_args[0]}"
-        case "$check_path" in
-        '!'*)
-            invert=1
-            ;;
-        *)
-            invert=0
-            ;;
-        esac
-        if [ -z "$check_path" ]; then
-            die "Error: Invalid check path in conditional entry: $entry"
-        fi
-        case "$check_path" in
-        /*) ;;
-        *)
-            check_path="$dest_path/$check_path"
-            ;;
-        esac
-        if [ $invert -eq 1 ]; then
-            if run_dest test -e "$check_path"; then
-                msg_yellow "Skipping $entry because $check_path exists"
+        src_args=("${src_args[@]:1}")
+
+        if ! test_path "$check_path" "$dest_path"; then
+            test_ret=$?
+            if [ $test_ret -eq 1 ]; then
+                msg_yellow "Skipping ${src_args[*]} because $check_path does not exist"
+                continue
+            elif [ $test_ret -eq 1 ]; then
+                msg_yellow "Skipping ${src_args[*]} because $check_path exists"
                 continue
             fi
         else
-            if ! run_dest test -e "$check_path"; then
-                msg_yellow "Skipping $entry because $check_path does not exist"
-                continue
-            fi
-        fi </dev/null
-
-        src_args=("${src_args[@]:1}")
-    else
-        if [ ${#src_args[@]} -lt 2 ]; then
-            die "Error: At least two arguments are required in entry: $entry"
+            msg_verbose "Syncing ${src_args[*]}, as path check is successful for $check_path"
         fi
     fi
 
-    if [ -n "$extra_args" ]; then
-        IFS=$'\n' read -d '' -r -a extra_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$extra_args") || :
-    else
-        extra_args=()
+    if ! run_libsync "${src_args[@]}" -- "${extra_args[@]}" "$@" </dev/null; then
+        if should_die "Failed to sync ${src_args[*]}"; then
+            exit 1
+        else
+           failed=$((failed + 1))
+        fi
     fi
-    run_libsync "${src_args[@]}" -- "${extra_args[@]}" "$@" </dev/null || should_die "Failed to sync $line" || failed=$((failed + 1))
-done <"$tmpdir/lines"
+done <"$tmpdir/config"
 
 if [[ $failed -ne 0 ]]; then
     if [[ -n "$continue_on_error" ]]; then
