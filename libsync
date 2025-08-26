@@ -168,9 +168,25 @@ run_dest() {
     fi
 }
 
+run_dest_quiet() {
+    if [ $dest_remote -eq 1 ]; then
+        run_remote_quiet "$dest_host" "$@"
+    else
+        "$@"
+    fi
+}
+
 run_src() {
     if [ $src_remote -eq 1 ]; then
         run_remote "$src_host" "$@"
+    else
+        "$@"
+    fi
+}
+
+run_src_quiet() {
+    if [ $src_remote -eq 1 ]; then
+        run_remote_quiet "$src_host" "$@"
     else
         "$@"
     fi
@@ -187,7 +203,7 @@ set_archive_cmds() {
 
     list_cmd=
     unpack_cmd=
-    if { [ "$is_dest" = 1 ] && run_dest test -f "$archive_file"; } || { [ "$is_dest" = 0 ] && run_src test -f "$archive_file"; }; then
+    if { [ "$is_dest" = 1 ] && run_dest_quiet test -f "$archive_file"; } || { [ "$is_dest" = 0 ] && run_src_quiet test -f "$archive_file"; }; then
         if { [ "$is_dest" = 1 ] && [ "$dest_has_unar" = 1 ]; } || { [ "$is_dest" = 0 ] && [ "$src_has_unar" = 1 ]; }; then
             case "$archive_file" in
             *.7z | *.zip | *.dosz | *.tar.gz | *.tar.bz2 | *.tar.xz)
@@ -243,8 +259,8 @@ checksum_src_paths() {
         src_path=${src#*:}
         src_dir=$(dirname "$src_path")
         src_file=$(basename "$src_path")
-        if run_src test -f "$src_path"; then
-            if [ $cache_checksums -eq 1 ] && run_src test -f "$src_dir/.sha1/$src_file.sha1"; then
+        if run_src_quiet test -f "$src_path"; then
+            if [ $cache_checksums -eq 1 ] && run_src_quiet test -f "$src_dir/.sha1/$src_file.sha1"; then
                 msg_debug "Using cached checksum for $src_path"
                 existing_chksum=$(run_src cat "$src_dir/.sha1/$src_file.sha1" | cut -d" " -f1)
                 if [ $validate_checksums -eq 1 ]; then
@@ -266,7 +282,7 @@ checksum_src_paths() {
                         cat
                     fi
             fi
-        elif run_src test -d "$src_path"; then
+        elif run_src_quiet test -d "$src_path"; then
             echo "$src_path/"
         fi
     done
@@ -443,22 +459,22 @@ for i in "${!src_paths[@]}"; do
             ;;
         esac
     fi
-    if ! run_src test -e "$src"; then
+    if ! run_src_quiet test -e "$src"; then
         die "error: $src does not exist\n"
     fi
-    if [ $dir_dest -eq 0 ] && run_src test -d "$src"; then
+    if [ $dir_dest -eq 0 ] && run_src_quiet test -d "$src"; then
         die "error: $src is a directory but $dest_path is not\n"
     fi
     if [ $dir_dest -eq 1 ] && [ $uncompress -eq 1 ]; then
-        if run_src test -f "$src"; then
+        if run_src_quiet test -f "$src"; then
             compressed_inputs=1
-        elif run_src test -d "$src"; then
+        elif run_src_quiet test -d "$src"; then
             directory_inputs=1
         fi
     fi
 done
 
-# if run_dest test -f "$dest_path"; then
+# if run_dest_quiet test -f "$dest_path"; then
 #     if [ $dir_dest -eq 1 ]; then
 #         die "error: $dest_path is a file, but is expected to be a directory\n"
 #     elif [ $directory_inputs -eq 1 ]; then
@@ -476,10 +492,10 @@ if [[ $compressed_inputs -eq 1 ]]; then
     if [[ $dry_run -eq 1 ]]; then
         msg_debug "Uncompressing compressed inputs to $dest_path"
     else
-        if run_src command -v unar &>/dev/null; then
+        if run_src_quiet command -v unar &>/dev/null; then
             src_has_unar=1
         fi
-        if run_dest command -v unar &>/dev/null; then
+        if run_dest_quiet command -v unar &>/dev/null; then
             dest_has_unar=1
         fi
         if [[ $stamp -eq 1 ]]; then
@@ -487,7 +503,7 @@ if [[ $compressed_inputs -eq 1 ]]; then
             # a dest timestamp '.unpacked' file in the directory destination, and skip the unpacking if
             # the compressed files are older than the '.unpacked' file.
             if [[ $directory_inputs -eq 0 ]] && [[ $dry_run -eq 0 ]] && [[ $force_uncompress -eq 0 ]]; then
-                dest_mtime=$(run_dest stat -c %Y "$dest_path/.unpacked" 2>/dev/null || echo 0) || true
+                dest_mtime=$(run_dest_quiet stat -c %Y "$dest_path/.unpacked" 2>/dev/null || echo 0) || true
                 if [ "$dest_mtime" = 0 ]; then
                     to_update=1
                 else
@@ -501,8 +517,8 @@ if [[ $compressed_inputs -eq 1 ]]; then
                             src_remote=0
                             src_host=
                         fi
-                        if run_src test -f "$src" && set_archive_cmds "$src" .; then
-                            src_mtime=$(run_src stat -c %Y "$src" || echo 0)
+                        if run_src_quiet test -f "$src" && set_archive_cmds "$src" .; then
+                            src_mtime=$(run_src_quiet stat -c %Y "$src" || echo 0)
                             if [ "${src_mtime:-0}" -gt "${dest_mtime:-0}" ]; then
                                 to_update=1
                             fi
@@ -523,7 +539,7 @@ if [[ $compressed_inputs -eq 1 ]]; then
                 fi
             fi
 
-            if run_dest test -f "$dest_path/.unpacked"; then
+            if run_dest_quiet test -f "$dest_path/.unpacked"; then
                 if [ "$(run_dest find "$dest_path" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name .unpacked | wc -l | xargs)" -lt 1 ]; then
                     die "Empty folder at existing unpacked $dest_path"
                 fi
@@ -563,7 +579,7 @@ if [[ $compressed_inputs -eq 1 ]]; then
                 if [ $hoist -eq 1 ] && [ "$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name ._\* | wc -l | xargs)" = 1 ]; then
                     msg_debug "Hoisting contents of single-directory archive for $src"
                     single_dir=$(run_dest find "$unpack_tmp" -mindepth 1 -maxdepth 1 -type d -not -name .DS_Store -not -name ._\*)
-                    if run_dest test -d "$single_dir"; then
+                    if run_dest_quiet test -d "$single_dir"; then
                         run_dest find "$single_dir" -mindepth 1 -maxdepth 1 -not -name .DS_Store -not -name ._\* |
                             tr '\n' '\0' |
                             run_dest xargs -0 -I"{}" mv "{}" "$tmp_path/"
