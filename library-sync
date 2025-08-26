@@ -9,6 +9,9 @@
 # Options:
 #     -c CONFIG_FILE  Use the specified configuration file. If the path is relative,
 #                     assume it's relative to the 'source' directory. Default: source/.library-sync
+#     -C              Conditional mode. Expect config file lines to be in the format "check_path\tsource_path destination_path",
+#                     where check_path is a path to a file or directory that must exist for the sync to occur.
+#                     If check_path is prefixed by a !, it must not exist.
 #     -H              Hoist the contents of a single-directory compressed archive to the destination path, rather than creating a subdirectory
 #     -i PATTERN      Include only source paths matching PATTERN
 #     -x PATTERN      Exclude source paths matching PATTERN
@@ -45,6 +48,7 @@ show_help() {
 
 process_arguments() {
     config_file=.library-sync
+    conditional_mode=0
     hoist=0
     include=
     exclude=
@@ -54,17 +58,18 @@ process_arguments() {
     verbosity=0
     libsync_opts=()
 
-    while getopts "c:Hi:x:lknvqh" opt; do
+    while getopts "c:CHi:x:lknvqh" opt; do
         case $opt in
         c) config_file=$OPTARG ;;
+        C) conditional_mode=1 ;;
         H) hoist=1 ;;
         i) include=$OPTARG ;;
         x) exclude=$OPTARG ;;
         l) hard_link=1 ;;
         k) continue_on_error=1 ;;
         n) dry_run=1 ;;
-        v) verbosity=$((verbosity+1)) ;;
-        q) verbosity=$((verbosity-1)) ;;
+        v) verbosity=$((verbosity + 1)) ;;
+        q) verbosity=$((verbosity - 1)) ;;
         h)
             show_help
             exit 0
@@ -203,7 +208,10 @@ run() {
     fi
     if [ "${dry_run:-0}" != "1" ]; then
         suppress_int=1
-        ( trap - INT EXIT TERM; exec "$@" ) &
+        (
+            trap - INT EXIT TERM
+            exec "$@"
+        ) &
         wait $! || ret=$?
     fi
     return $ret
@@ -215,7 +223,10 @@ run_always() {
         printf '❯ %s\n' "$(printcmd "$@")" >&2
     fi
     suppress_int=1
-    ( trap - INT EXIT TERM; exec "$@" ) &
+    (
+        trap - INT EXIT TERM
+        exec "$@"
+    ) &
     wait $! || ret=$?
     return $ret
 }
@@ -271,6 +282,40 @@ run_libsync() {
     run_always libsync "$@" </dev/null
 }
 
+run_remote() {
+    local host="$1"
+    shift
+    local dashx=
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        dashx=-x
+    fi
+    set -- bash $dashx -c "$(quote-args "$@")"
+    if [ -t 0 ]; then
+        cat /dev/null
+    else
+        cat
+    fi |
+        run ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
+}
+
+run_remote_quiet() {
+    local host="$1"
+    shift
+    if [ -t 0 ]; then
+        cat /dev/null
+    else
+        cat
+    fi |
+        ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$host" "$(quote-args "$@")"
+}
+
+run_dest() {
+    if [ $dest_remote -eq 1 ]; then
+        run_remote "$dest_host" "$@"
+    else
+        "$@"
+    fi
+}
 
 process_arguments "$@"
 shift $((OPTIND - 1))
@@ -290,6 +335,16 @@ if [[ ${#paths[@]} -ne 2 ]]; then
 fi
 source=${paths[0]}
 destination_root=${paths[1]}
+if [[ "$destination_root" == *:* ]]; then
+    dest_remote=1
+    dest_host="${destination_root%%:*}"
+    dest_path="${destination_root#*:}"
+else
+    dest_remote=0
+    dest_host=
+    dest_path="$destination_root"
+fi
+
 case "$config_file" in
 /*) ;;
 *) config_file=$source/$config_file ;;
@@ -303,27 +358,27 @@ read_config_file() {
     tempfile="$(mktemp "$tmpdir/config.XXXXXX")"
 
     rsync -a "$config_file" "$tempfile"
-    cat "$tempfile" \
-        | { grep -v '^#' || true; } \
-        | { grep -v '^ *$' || true; } \
-        | while read -r line; do
+    cat "$tempfile" |
+        { grep -v '^#' || true; } |
+        { grep -Ev '^[ \t]*$' || true; } |
+        while read -r line; do
             case "$line" in
-                include\ *)
-                    include_file=${line#include }
-                    case "$include_file" in
-                        /*)
-                            ;;
-                        *)
-                            include_file="$(dirname "$config_file")/$include_file"
-                            ;;
-                    esac
-                    if ! [ -e "$include_file" ]; then
-                        die "Error: include file $include_file from $config_file not found"
-                    fi
-                    read_config_file "$include_file"
-                    ;;
+            include\ *)
+                include_file=${line#include }
+                case "$include_file" in
+                /*) ;;
                 *)
-                    printf '%s\n' "$line"
+                    include_file="$(dirname "$config_file")/$include_file"
+                    ;;
+                esac
+                if ! [ -e "$include_file" ]; then
+                    die "Error: include file $include_file from $config_file not found"
+                fi
+                read_config_file "$include_file"
+                ;;
+            *)
+                printf '%s\n' "$line"
+                ;;
             esac
         done
 }
@@ -331,19 +386,59 @@ read_config_file() {
 read_config_file "$config_file" >"$tmpdir/lines"
 
 failed=0
-while IFS=$'\t' read -r line extra_args; do
+while IFS=$'\t' read -r entry extra_args; do
     # We handle quoted arguments, etc here, but leave any wildcards to the libsync script.
     # This also avoids any use of eval.
-    IFS=$'\n' read -d '' -r -a src_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$line") || :
-    if [ ${#src_args[@]} -lt 2 ]; then
-        die "Error: At least two arguments are required in line: $line"
+    IFS=$'\n' read -d '' -r -a src_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$entry") || :
+
+    if [ $conditional_mode -eq 1 ]; then
+        if [ ${#src_args[@]} -lt 3 ]; then
+            die "Error: At least three arguments are required in conditional entry: $entry"
+        fi
+
+        check_path="${src_args[0]}"
+        case "$check_path" in
+        '!'*)
+            invert=1
+            ;;
+        *)
+            invert=0
+            ;;
+        esac
+        if [ -z "$check_path" ]; then
+            die "Error: Invalid check path in conditional entry: $entry"
+        fi
+        case "$check_path" in
+        /*) ;;
+        *)
+            check_path="$dest_path/$check_path"
+            ;;
+        esac
+        if [ $invert -eq 1 ]; then
+            if run_dest test -e "$check_path"; then
+                msg_yellow "Skipping $entry because $check_path exists"
+                continue
+            fi
+        else
+            if ! run_dest test -e "$check_path"; then
+                msg_yellow "Skipping $entry because $check_path does not exist"
+                continue
+            fi
+        fi </dev/null
+
+        src_args=("${src_args[@]:1}")
+    else
+        if [ ${#src_args[@]} -lt 3 ]; then
+            die "Error: At least three arguments are required in entry: $entry"
+        fi
     fi
+
     if [ -n "$extra_args" ]; then
         IFS=$'\n' read -d '' -r -a extra_args < <(python3 -c 'import shlex, sys; [print(x) for x in shlex.split(sys.argv[1])]' "$extra_args") || :
     else
         extra_args=()
     fi
-    run_libsync "${src_args[@]}" -- "${extra_args[@]}" "$@" || should_die "Failed to sync $line" || failed=$((failed + 1))
+    run_libsync "${src_args[@]}" -- "${extra_args[@]}" "$@" </dev/null || should_die "Failed to sync $line" || failed=$((failed + 1))
 done <"$tmpdir/lines"
 
 if [[ $failed -ne 0 ]]; then
