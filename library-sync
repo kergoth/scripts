@@ -459,7 +459,7 @@ while read_config_line src_args extra_args; do
             msg_yellow "Skipping ${src_args[*]} because $check_path exists"
             continue
         else
-            msg_verbose "Syncing ${src_args[*]}, as path check is successful for $check_path"
+            msg_debug "Syncing ${src_args[*]}, as path check is successful for $check_path"
         fi
     fi
 
