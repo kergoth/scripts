@@ -355,7 +355,7 @@ fi
 
 # Early SSH communication test if destination is remote
 if [ "${dest_remote:-0}" -eq 1 ] && [ -n "${dest_host:-}" ]; then
-    if ! timeout 5s run_remote_quiet "$dest_host" exit; then
+    if ! run_remote_quiet "$dest_host" exit; then
         echo "Error: Unable to communicate with remote host $dest_host via SSH." >&2
         exit 2
     fi
