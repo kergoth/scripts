@@ -5,7 +5,7 @@ set -euo pipefail
 
 ret=0
 
-gh api orgs/MustardOS/repos | jq -r '.[].html_url' | grep -v /theme | nlxargs -n 1 ghq get || ret=$?
+gh api orgs/MustardOS/repos | jq -r '.[].html_url' | grep -v /theme | nlxargs -n 1 ghq get "$@" || ret=$?
 
 if command -v mr &>/dev/null; then
     muos_dir="${GHQ_ROOT:-$HOME/ghq}"/github.com/MustardOS
