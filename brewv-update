@@ -42,11 +42,7 @@ done
 shift $((OPTIND - 1))
 
 if [ $# -eq 0 ]; then
-    OIFS="$IFS"
-    IFS="$(printf '\n')"
-    # shellcheck disable=SC2046
-    set -- $(cd "$HOMEBREWS_HOME" && find . -mindepth 1 -maxdepth 1 -type d | sed -e 's#^\./##')
-    IFS="$OIFS"
+    (cd "$HOMEBREWS_HOME" && find . -mindepth 1 -maxdepth 1 -type d | sed -e 's#^\./##') | tr '\n' '\0' | xargs -0 "$0"
 fi
 
 ret=0
