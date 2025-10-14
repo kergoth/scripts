@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Clone the specified organization's repositories with ghq and set up mr/myrepos
+
+set -euo pipefail
+
+ret=0
+
+org=$1
+shift
+
+gh api orgs/"$org"/repos | jq -r '.[].html_url' | grep -v /theme | nlxargs -n 1 ghq get "$@" || ret=$?
+
+if command -v mr &>/dev/null; then
+    org_dir="${GHQ_ROOT:-$HOME/ghq}"/github.com/"$org"
+    touch "$org_dir/.mrconfig"
+
+    for i in "$org_dir"/*/.git; do
+        ( cd "${i%/.git}" && mr register  || { echo >&2 "Warning: register failed on $i"; exit 1; } )
+    done || ret=$?
+fi
+
+exit $ret
