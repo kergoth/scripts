@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Clone the RetroDECK repositories with ghq and set up mr/myrepos
+
+set -euo pipefail
+
+ret=0
+
+gh api orgs/RetroDECK/repos | jq -r '.[].html_url' | grep -v /theme | nlxargs -n 1 ghq get "$@" || ret=$?
+
+if command -v mr &>/dev/null; then
+    muos_dir="${GHQ_ROOT:-$HOME/ghq}"/github.com/RetroDECK
+    touch "$muos_dir/.mrconfig"
+
+    for i in "$muos_dir"/*/.git; do
+        ( cd "${i%/.git}" && mr register  || { echo >&2 "Warning: register failed on $i"; exit 1; } )
+    done || ret=$?
+fi
+
+exit $ret
