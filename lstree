@@ -1,0 +1,16 @@
+#!/bin/sh
+# Print a directory tree using indent for depth, but unlike the 'tree'
+# command, shows no ascii/utf8 lines. This format is useful for dumping the
+# tree in a form which is pleasant to edit in a text editor, e.g. for
+# reviewing/auditing a directory tree, file by file.
+
+set -eu
+
+if [ $# -eq 0 ]; then
+    set -- .
+fi
+
+path="$1"
+shift
+find "$path" \( -name .git -o -name .hg -o -name .svn \) -printf '%p %y\n' -prune -o \( "$@" -printf '%p %y\n' \) | \
+    sed 's,/\( .\)$,\1,; s, [^d]$,,; s;[^/]*/;|___;g;s;___|*;    ;g; s,^|,,; s, d$,/,'
