@@ -1,0 +1,39 @@
+#!/bin/sh
+
+set -eu
+
+# Usage:
+#   comm-cmd [comm options] -- "cmd1 ..." "cmd2 ..."
+
+# Parse comm(1) options
+opts=
+while getopts "123i" opt; do
+    opts="$opts -$opt"
+done
+shift $((OPTIND - 1))
+
+# Ensure exactly two commands follow, separated from options by --
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 [comm options] -- <cmd1> <cmd2>" >&2
+    exit 1
+fi
+
+cmd1="$1"
+cmd2="$2"
+
+# Temp directory
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/comm-cmd.XXXXXX") ||
+    { echo "Failed to create tmpdir" >&2; exit 1; }
+
+trap 'rm -rf "$tmpdir"' EXIT INT HUP TERM
+
+f1="$tmpdir/out1"
+f2="$tmpdir/out2"
+
+# Run commands and capture output
+# Use 'sh -c' to allow pipelines, redirects, etc.
+sh -c "$cmd1" >"$f1"
+sh -c "$cmd2" >"$f2"
+
+# Run comm with provided options
+comm $opts "$f1" "$f2"
