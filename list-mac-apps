@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: ${0##*/} [OPTIONS]
+
+List macOS apps in /Applications and ~/Applications.
+
+Options:
+    -c          Exclude apps installed via Homebrew casks
+    -a          Exclude Apple apps (CFBundleIdentifier starting with com.apple.)
+    -v          Verbose output (show full app path, and app type when known)
+    -h          Show this help message
+EOF
+}
+
+process_arguments() {
+    verbose=0
+    exclude_casks=0
+    exclude_apple=0
+
+    while getopts ":hvca" opt; do
+        case "$opt" in
+            h) usage; exit 0 ;;
+            v) verbose=1 ;;
+            c) exclude_casks=1 ;;
+            a) exclude_apple=1 ;;
+            \?)
+                echo "Unknown option: -$OPTARG" >&2
+                usage >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+
+check_dependencies() {
+    missing=0
+
+    if ! command -v mdfind >/dev/null 2>&1; then
+        echo "Error: mdfind not found" >&2
+        missing=1
+    fi
+
+    if [ "$exclude_casks" -eq 1 ]; then
+        if ! command -v brew >/dev/null 2>&1; then
+            echo "Error: brew not found (required with -e)" >&2
+            missing=1
+        fi
+        if ! command -v jq >/dev/null 2>&1; then
+            echo "Error: jq not found (required with -e)" >&2
+            missing=1
+        fi
+    fi
+
+    [ "$missing" -eq 0 ] || exit 1
+}
+
+gather_cask_apps() {
+    brew info --json=v2 --installed 2>/dev/null \
+        | jq -r '.[].[] | select(.artifacts) | select(.artifacts[] | has("app"))
+                  | (.artifacts[] | select(.app) | .app[0])' \
+        | while IFS= read -r app_path; do
+            printf '%s\n' "${app_path##*/}"
+          done > "$tmpdir/cask_apps"
+}
+
+is_cask_app() {
+    local app_name=$1
+    grep -Fxq "$app_name" "$tmpdir/cask_apps" 2>/dev/null
+}
+
+gather_installed_apps() {
+    : > "$tmpdir/installed_apps"
+
+    if [ -d /Applications ]; then
+        mdfind 'kMDItemContentType == "com.apple.application-bundle"' \
+            -onlyin /Applications >>"$tmpdir/installed_apps" || true
+    fi
+
+    if [ -d "$HOME/Applications" ]; then
+        mdfind 'kMDItemContentType == "com.apple.application-bundle"' \
+            -onlyin "$HOME/Applications" >>"$tmpdir/installed_apps" || true
+    fi
+
+    sort -u "$tmpdir/installed_apps" | while IFS= read -r app_path; do
+        # Canonicalize: remove nested paths and keep only the outermost Foo.app
+        #   /Applications/Parallels Desktop.app/Contents/Applications/Parallels Link.app
+        # → /Applications/Parallels Desktop.app
+        primary_app="${app_path%%.app*}.app"
+
+        if [ -d "$primary_app" ]; then
+            echo "$primary_app"
+        fi
+    done
+}
+
+get_cf_bundle_identifier() {
+    local app_path=$1
+    local plist="$app_path/Contents/Info.plist"
+    local bundle_id=
+
+    if [ -f "$plist" ]; then
+        if [ -x /usr/libexec/PlistBuddy ]; then
+            bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null || true)
+        else
+            local plist_no_ext=${plist%.plist}
+            bundle_id=$(defaults read "$plist_no_ext" CFBundleIdentifier 2>/dev/null || true)
+        fi
+    fi
+
+    printf '%s\n' "$bundle_id"
+}
+
+is_apple_app() {
+    local app_path=$1
+    local bundle_id
+    bundle_id=$(get_cf_bundle_identifier "$app_path")
+
+    [[ "$bundle_id" == com.apple.* ]] && return 0
+    return 1
+}
+
+get_app_type() {
+    local app_path=$1
+    local bundle_id
+    local settings_plist
+    local creator
+    local ext
+
+    bundle_id=$(get_cf_bundle_identifier "$app_path")
+
+    # Safari Web App
+    if [[ "$bundle_id" == com.apple.Safari.WebApp* ]]; then
+        echo "safari-web-app"
+        return 0
+    fi
+
+    # Automator
+    if [ -e "$app_path/Contents/MacOS/Automator Application Stub" ] \
+       || [ -e "$app_path/Contents/MacOS/droplet" ]; then
+        echo "automator-app"
+        return 0
+    fi
+
+    # Wine
+    if [ -e "$app_path/Contents/MacOS/startwine" ]; then
+        echo "wine-app"
+        return 0
+    fi
+
+    # Wineskin
+    if [ -e "$app_path/Contents/MacOS/WineskinLauncher" ]; then
+        echo "wineskin-app"
+        return 0
+    fi
+
+    # Fluid
+    if [ -e "$app_path/Contents/MacOS/FluidApp" ]; then
+        echo "fluid-app"
+        return 0
+    fi
+
+    # Safari extensions
+    if [ -n "$(find "$app_path" -wholename '*.appex/Contents/Info.plist' 2>/dev/null)" ]; then
+        ext=$(list_safari_extension_types "$app_path" | tr '\n' '+' | sed -e 's/+$//')
+        if [ -n "$ext" ]; then
+            echo "safari-$ext"
+            return 0
+        fi
+    fi
+
+    # Platypus
+    settings_plist="$app_path/Contents/Resources/AppSettings.plist"
+    if [ -f "$settings_plist" ]; then
+        if [ -x /usr/libexec/PlistBuddy ]; then
+            creator=$(/usr/libexec/PlistBuddy -c 'Print :Creator' "$settings_plist" 2>/dev/null || true)
+        else
+            local plist_no_ext=${settings_plist%.plist}
+            creator=$(defaults read "$plist_no_ext" Creator 2>/dev/null || true)
+        fi
+        if [[ "$creator" == Platypus-* ]]; then
+            echo "platypus-app"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+list_safari_extension_types() {
+    local app=$1
+    local plist
+    local id
+
+    find "$app" -wholename '*.appex/Contents/Info.plist' 2>/dev/null |
+        while read -r plist; do
+            id=$(grep -A1 'NSExtensionPointIdentifier' "$plist" \
+                 | tail -n +2 \
+                 | sed -e 's/[[:space:]]*<string>//; s#</string>##')
+            case "$id" in
+                com.apple.Safari.extension|com.apple.Safari.content-blocker|com.apple.Safari.web-extension)
+                    printf '%s\n' "${id#com.apple.Safari.}"
+                    ;;
+            esac
+        done |
+        sort -u
+}
+
+list_apps() {
+    : > "$tmpdir/output"
+
+    # Deduplicate by canonicalized app path
+    while IFS= read -r app_path; do
+        local app_name=${app_path##*/}
+
+        if [ "$exclude_apple" -eq 1 ] && is_apple_app "$app_path"; then
+            continue
+        fi
+
+        if [ "$exclude_casks" -eq 1 ] && is_cask_app "$app_name"; then
+            continue
+        fi
+
+        if [ "$verbose" -eq 1 ]; then
+            local app_type=
+            if app_type=$(get_app_type "$app_path"); then
+                printf '%s\t%s\n' "$app_path" "$app_type" >>"$tmpdir/output"
+            else
+                printf '%s\t\n' "$app_path" >>"$tmpdir/output"
+            fi
+        else
+            echo "$app_name" >>"$tmpdir/output"
+        fi
+    done < <(gather_installed_apps | sort -u)
+
+    if [ "$verbose" -eq 1 ]; then
+        sort -u -s -t $'\t' -k2,2f -k1,1f "$tmpdir/output"
+    else
+        sort -u -f "$tmpdir/output"
+    fi
+}
+
+main() {
+    tmpdir=$(mktemp -d)
+    trap 'rm -rf "$tmpdir"' EXIT
+
+    process_arguments "$@"
+    check_dependencies
+    [ "$exclude_casks" -eq 1 ] && gather_cask_apps
+    list_apps
+}
+
+main "$@"
