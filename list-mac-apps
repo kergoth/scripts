@@ -249,7 +249,9 @@ main() {
 
     process_arguments "$@"
     check_dependencies
-    [ "$exclude_casks" -eq 1 ] && gather_cask_apps
+    if [ "$exclude_casks" -eq 1 ]; then
+        gather_cask_apps
+    fi
     list_apps
 }
 
