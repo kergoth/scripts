@@ -4,9 +4,9 @@ set -euo pipefail
 
 usage() {
     cat <<EOF
-Usage: ${0##*/} [OPTIONS]
+Usage: ${0##*/} [OPTIONS] [DIRECTORY...]
 
-List macOS apps in /Applications and ~/Applications.
+List macOS apps in the specified directories, defaulting to /Applications and ~/Applications.
 
 Options:
     -c          Exclude apps installed via Homebrew casks
@@ -73,16 +73,24 @@ is_cask_app() {
 }
 
 gather_installed_apps() {
-    : > "$tmpdir/installed_apps"
-
-    if [ -d /Applications ]; then
-        mdfind 'kMDItemContentType == "com.apple.application-bundle"' \
-            -onlyin /Applications >>"$tmpdir/installed_apps" || true
+    if [ $# -eq 0 ]; then
+        set -- /Applications "$HOME/Applications"
     fi
 
-    if [ -d "$HOME/Applications" ]; then
-        mdfind 'kMDItemContentType == "com.apple.application-bundle"' \
-            -onlyin "$HOME/Applications" >>"$tmpdir/installed_apps" || true
+    : > "$tmpdir/installed_apps"
+
+    for dir in "$@"; do
+        if [ -d "$dir" ]; then
+            mdfind 'kMDItemContentType == "com.apple.application-bundle"' \
+                -onlyin "$dir" >>"$tmpdir/installed_apps" || true
+        else
+            echo "Error: Directory '$dir' does not exist." >&2
+            return 1
+        fi
+    done
+    if ! [ -s "$tmpdir/installed_apps" ]; then
+        echo "No installed apps found." >&2
+        return 1
     fi
 
     sort -u "$tmpdir/installed_apps" | while IFS= read -r app_path; do
@@ -234,7 +242,7 @@ list_apps() {
         else
             echo "$app_name" >>"$tmpdir/output"
         fi
-    done < <(gather_installed_apps | sort -u)
+    done < <(gather_installed_apps "$@" | sort -u)
 
     if [ "$verbose" -eq 1 ]; then
         sort -u -s -t $'\t' -k2,2f -k1,1f "$tmpdir/output"
@@ -248,11 +256,13 @@ main() {
     trap 'rm -rf "$tmpdir"' EXIT
 
     process_arguments "$@"
+    shift $((OPTIND - 1))
+
     check_dependencies
     if [ "$exclude_casks" -eq 1 ]; then
         gather_cask_apps
     fi
-    list_apps
+    list_apps "$@"
 }
 
 main "$@"
