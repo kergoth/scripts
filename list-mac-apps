@@ -6,7 +6,11 @@ usage() {
     cat <<EOF
 Usage: ${0##*/} [OPTIONS] [DIRECTORY...]
 
-List macOS apps in the specified directories, defaulting to /Applications and ~/Applications.
+List macOS apps in the specified directories, defaulting to:
+
+  - ~/Applications
+  - /Applications
+  - /System/Applications
 
 Options:
     -c          Exclude apps installed via Homebrew casks
@@ -34,6 +38,12 @@ process_arguments() {
                 ;;
         esac
     done
+    shift $((OPTIND - 1))
+
+    if [ $# -eq 0 ]; then
+        set -- ~/Applications /Applications /System/Applications
+    fi
+    appdirs=("$@")
 }
 
 check_dependencies() {
@@ -73,10 +83,6 @@ is_cask_app() {
 }
 
 gather_installed_apps() {
-    if [ $# -eq 0 ]; then
-        set -- /Applications "$HOME/Applications"
-    fi
-
     : > "$tmpdir/installed_apps"
 
     for dir in "$@"; do
@@ -256,13 +262,11 @@ main() {
     trap 'rm -rf "$tmpdir"' EXIT
 
     process_arguments "$@"
-    shift $((OPTIND - 1))
-
     check_dependencies
     if [ "$exclude_casks" -eq 1 ]; then
         gather_cask_apps
     fi
-    list_apps "$@"
+    list_apps "${appdirs[@]}"
 }
 
 main "$@"
