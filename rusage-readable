@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""
+Wrapper for rusage that makes output more human-readable.
+Converts microsecond timestamps to appropriate units (µs, ms, s, m, h).
+"""
+
+import re
+import subprocess
+import sys
+
+
+def format_microseconds(us):
+    """Convert microseconds to human-readable time format."""
+    us = int(us.replace(",", ""))
+
+    if us < 1000:
+        return f"{us:,}µs"
+
+    if us < 1_000_000:
+        ms = us / 1000
+        return f"{ms:.2f}ms"
+
+    if us < 60_000_000:
+        s = us / 1_000_000
+        return f"{s:.2f}s"
+
+    if us < 3_600_000_000:
+        total_s = us / 1_000_000
+        mins = int(total_s // 60)
+        secs = total_s % 60
+        return f"{mins}m {secs:.2f}s"
+
+    total_s = us / 1_000_000
+    hours = int(total_s // 3600)
+    mins = int((total_s % 3600) // 60)
+    secs = total_s % 60
+    return f"{hours}h {mins}m {secs:.2f}s"
+
+
+def process_rusage_line(line):
+    """Process a single rusage output line and make it human-readable."""
+    # Only process rusage's "RL:" lines, accounting for ANSI escape codes
+    if not re.match(r"^(?:\033\[[0-9;]*m)*RL(?:\033\[[0-9;]*m)*: ", line):
+        return line
+
+    def replace_microseconds(match):
+        return format_microseconds(match.group(1))
+
+    return re.sub(r"(\d{1,3}(?:,\d{3})*)µs", replace_microseconds, line)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: rusage-readable <command> [args...]", file=sys.stderr)
+        print("Example: rusage-readable ls -la", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = ["rusage"] + sys.argv[1:]
+
+    try:
+        process = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
+
+        for line in process.stderr:
+            readable_line = process_rusage_line(line)
+            sys.stderr.write(readable_line)
+            sys.stderr.flush()
+
+        sys.exit(process.wait())
+
+    except FileNotFoundError:
+        print("Error: 'rusage' command not found", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+if __name__ == "__main__":
+    main()
