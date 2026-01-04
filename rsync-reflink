@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+# Usage: rsync-reflink [options] SOURCE... DEST [-- RSYNC_OPTIONS...]
+#
+# Wraps rsync for local-to-local syncs using reflink copies for better
+# performance and disk utilization. Uses rsync to determine what needs syncing,
+# then makes reflink copies for file transfers.
+#
+# Additional rsync options can be passed after -- following the destination.
+#
+# Options:
+#     -n          Dry run, don't actually do anything
+#     -v          Increase verbosity, can be specified multiple times
+#     -q          Decrease verbosity, can be specified multiple times
+#     -h          Show this help message
+
+set -euo pipefail
+
+usage() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    while getopts "nvqh" opt; do
+        case "$opt" in
+            n)
+                dry_run=1
+                ;;
+            v)
+                verbosity=$((verbosity + 1))
+                ;;
+            q)
+                verbosity=$((verbosity - 1))
+                ;;
+            h)
+                usage
+                exit 0
+                ;;
+            \?)
+                echo "Unknown option: -$OPTARG" >&2
+                usage >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    if [ $# -lt 2 ]; then
+        echo "Error: At least source and destination required" >&2
+        usage >&2
+        exit 1
+    fi
+
+    local paths=()
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "--" ]; then
+            shift
+            break
+        fi
+        paths+=("$1")
+        shift
+    done
+
+    if [ "${#paths[@]}" -lt 2 ]; then
+        echo "Error: At least source and destination required" >&2
+        usage >&2
+        exit 1
+    fi
+
+    sources=("${paths[@]:0:${#paths[@]}-1}")
+    dest=${paths[-1]}
+    rsync_opts=("$@")
+
+    if [ "$verbosity" -gt 0 ]; then
+        rsync_opts+=("-$(printf 'v%.0s' $(seq 1 $verbosity))")
+    elif [ "$verbosity" -lt 0 ]; then
+        rsync_opts+=("-$(printf 'q%.0s' $(seq 1 ${verbosity#-}))")
+    fi
+}
+
+msg() {
+    local fmt=$1
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf "$fmt\n" "$@" >&2
+}
+
+msg_color() {
+    local color=$1
+    shift
+    local fmt=$1
+    shift
+    # shellcheck disable=SC2059
+    if [ -n "${NO_COLOR:-}" ] || { [ -z "${COLOR:-}" ] && ! [ -t 1 ]; }; then
+        printf "${fmt}\n" "$@" >&2
+        return
+    else
+        printf "\033[${color}m${fmt}\033[0m\n" "$@" >&2
+    fi
+}
+
+msg_red() {
+    msg_color "0;31" "$@"
+}
+
+msg_yellow() {
+    msg_color "0;33" "$@"
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg_yellow "$@"
+    fi
+}
+
+msg_debug() {
+    if [ "${verbosity:-0}" -gt 1 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg_red "$@"
+    exit 1
+}
+
+cp_reflink() {
+    if [ "${OSTYPE:-}" = "darwin"* ] && [ "$(command -v cp)" = "/bin/cp" ]; then
+        cp -c "$@"
+    else
+        cp --reflink=auto "$@"
+    fi
+}
+
+is_remote_path() {
+    case "$1" in
+        *:*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+has_remote_paths() {
+    local path
+    for path in "$@"; do
+        if is_remote_path "$path"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+sync_with_rsync() {
+    local rsync_args=()
+    rsync_args+=("${rsync_opts[@]}")
+    rsync_args+=("${sources[@]}")
+    rsync_args+=("$dest")
+
+    if [ "${dry_run:-0}" -eq 1 ]; then
+        rsync_args=("--dry-run" "${rsync_args[@]}")
+    fi
+
+    rsync "${rsync_args[@]}"
+}
+
+sync_with_reflink() {
+    local itemize_file="$tmpdir/itemize"
+    local rsync_args=()
+
+    rsync_args+=("--itemize-changes" "--dry-run")
+    rsync_args+=("${rsync_opts[@]}")
+    rsync_args+=("${sources[@]}")
+    rsync_args+=("$dest")
+
+    msg_debug "Running rsync dry-run to determine changes"
+    rsync "${rsync_args[@]}" >"$itemize_file"
+
+    while IFS= read -r line; do
+        if [ -z "$line" ]; then
+            continue
+        fi
+
+        local item_type=${line:0:1}
+        local file_type=${line:1:1}
+        local path=${line:12}
+
+        msg_debug "Item: type='%s' file_type='%s' path='%s'" "$item_type" "$file_type" "$path"
+
+        if [ "$file_type" = "f" ] && [ "$item_type" != "." ]; then
+            local src_path="$path"
+            local dest_path="$dest/$path"
+
+            if [ "${#sources[@]}" -eq 1 ]; then
+                local source="${sources[0]}"
+                if [ -f "$source" ]; then
+                    src_path=$source
+                    dest_path=$dest
+                elif [ "${source%/}" != "$source" ]; then
+                    src_path="$source$path"
+                else
+                    src_path="$source/$path"
+                fi
+            else
+                for src in "${sources[@]}"; do
+                    if [ -f "$src" ]; then
+                        local src_base
+                        src_base=$(basename "$src")
+                        if [ "$path" = "$src_base" ]; then
+                            src_path=$src
+                            break
+                        fi
+                    elif [ -e "$src/$path" ]; then
+                        src_path="$src/$path"
+                        break
+                    fi
+                done
+            fi
+
+            msg_verbose "Reflink copy: %s -> %s" "$src_path" "$dest_path"
+            if [ "${dry_run:-0}" -eq 0 ]; then
+                local dest_dir
+                dest_dir=$(dirname "$dest_path")
+                if [ ! -d "$dest_dir" ]; then
+                    mkdir -p "$dest_dir"
+                fi
+                cp_reflink -a "$src_path" "$dest_path"
+            fi
+        fi
+    done <"$itemize_file"
+
+    msg_debug "Running final rsync for metadata and non-file items"
+    sync_with_rsync
+}
+
+main() {
+    local dry_run=0
+    local verbosity=0
+    local sources=()
+    local dest=
+    local rsync_opts=()
+
+    process_arguments "$@"
+
+    msg_debug "Sources: %s" "${sources[*]}"
+    msg_debug "Destination: %s" "$dest"
+    msg_debug "Rsync options: %s" "${rsync_opts[*]}"
+
+    if has_remote_paths "${sources[@]}" "$dest"; then
+        msg_verbose "Remote path detected, using standard rsync"
+        sync_with_rsync
+        return
+    fi
+
+    sync_with_reflink
+}
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+main "$@"
