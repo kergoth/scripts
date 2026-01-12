@@ -1,0 +1,11 @@
+#!/bin/sh
+# Convert dirdiff output to be more `git status`.
+#
+# Usage: dirdiff dir1 dir2 | ./dirdiff-to-gitstatus
+
+sed -E '
+s/^\[Present in second dir\. only\][[:space:]]+"(.*)"$/?? \1/;
+s/^\[Present in first dir\. only\][[:space:]]+"(.*)"$/D  \1/;
+s/^\[Files differ\][[:space:]]+"(.*)"$/M  \1/;
+s/^"(.*)"$/\1/;
+'
