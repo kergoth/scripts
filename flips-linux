@@ -55,7 +55,7 @@ if ! limactl list --quiet "$LIMA_INSTANCE" &>/dev/null; then
     run limactl start "$LIMA_INSTANCE" \
         || die "failed to start $LIMA_INSTANCE VM"
     trap 'run limactl stop -f "$LIMA_INSTANCE"' EXIT INT TERM
-elif limactl list --all-fields "$LIMA_INSTANCE" | tail -n +2 | awk '{print $2}' | grep -q Stopped; then
+elif limactl list --all-fields "$LIMA_INSTANCE" | tail -n +2 | awk '{print $2}' | grep Stopped >/dev/null; then
     run limactl start "$LIMA_INSTANCE" \
         || die "failed to start $LIMA_INSTANCE VM"
     trap 'run limactl stop -f "$LIMA_INSTANCE"' EXIT INT TERM

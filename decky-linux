@@ -54,7 +54,7 @@ if ! limactl list --quiet "$LIMA_DOCKER_INSTANCE" &>/dev/null; then
     run limactl create --name="$LIMA_DOCKER_INSTANCE" "$HOME/Projects/lima/$LIMA_DOCKER_INSTANCE.yaml"
     run limactl start "$LIMA_DOCKER_INSTANCE" || die "failed to start $LIMA_DOCKER_INSTANCE VM"
     trap 'run limactl stop -f "$LIMA_DOCKER_INSTANCE"' EXIT INT TERM
-elif limactl list --all-fields "$LIMA_DOCKER_INSTANCE" | tail -n +2 | awk '{print $2}' | grep -q Stopped; then
+elif limactl list --all-fields "$LIMA_DOCKER_INSTANCE" | tail -n +2 | awk '{print $2}' | grep Stopped >/dev/null; then
     run limactl start "$LIMA_DOCKER_INSTANCE" || die "failed to start $LIMA_DOCKER_INSTANCE VM"
     trap 'run limactl stop -f "$LIMA_DOCKER_INSTANCE"' EXIT INT TERM
 fi

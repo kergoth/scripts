@@ -21,7 +21,7 @@ if [ $# -eq 0 ]; then
     set -- "$tempdir/stdin.zip"
 fi
 
-if unzip -l "$1" | grep -q "1 file"; then
+if unzip -l "$1" | grep "1 file" >/dev/null; then
     unzip -p "$1"
 else
     cat "$1"
