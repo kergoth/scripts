@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage:
+  wait-for-nas-connectivity [--timeout SEC] [--interval SEC] [--target HOST] [--ts-required]
+
+Exit codes:
+  0 = connectivity ready
+  1 = timed out / not ready
+  2 = usage error
+
+Options:
+  --timeout SEC     Total time to wait (default: 90)
+  --interval SEC    Sleep between checks (default: 2)
+  --target HOST  Hostname/IP to validate path (default: "")
+  --ts-required     Require tailscale status to be OK (default: optional unless set)
+EOF
+}
+
+log() {
+    # Keep quiet by default for Automator; enable by setting DEBUG=1
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        printf '%s %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*" >&2
+    fi
+}
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+locate_app_by_id() {
+    mdfind "kMDItemContentType == 'com.apple.application-bundle' && kMDItemCFBundleIdentifier == '$*'"
+}
+
+tailscale_cmd() {
+    if have_cmd tailscale; then
+        tailscale "$@"
+        return 0
+    fi
+
+    local tailscale_app
+    tailscale_app="$(locate_app_by_id io.tailscale.ipn.macos | head -n 1 || true)"
+    if [[ -z "$tailscale_app" ]]; then
+        return 1
+    fi
+
+    "$tailscale_app/Contents/MacOS/Tailscale" "$@"
+}
+
+is_default_route_up() {
+    route -n get default >/dev/null 2>&1
+}
+
+is_dns_working() {
+    dscacheutil -q host -a name example.com >/dev/null 2>&1
+}
+
+is_tailscale_up() {
+    tailscale_cmd status >/dev/null 2>&1
+}
+
+can_reach_target_445() {
+    local target="$1"
+    [[ -n "$target" ]] || return 1
+    nc -G 1 -vz "$target" 445 >/dev/null 2>&1
+}
+
+wait_for_connectivity() {
+    local timeout="$1"
+    local interval="$2"
+    local target="$3"
+    local ts_required="$4"
+
+    local start now elapsed
+    start="$(date +%s)"
+
+    while true; do
+        now="$(date +%s)"
+        elapsed=$((now - start))
+
+        if (( elapsed >= timeout )); then
+            log "Timeout after ${timeout}s."
+            return 1
+        fi
+
+        if ! is_default_route_up; then
+            log "Waiting: default route..."
+            sleep "$interval"
+            continue
+        fi
+
+        if ! is_dns_working; then
+            log "Waiting: DNS..."
+            sleep "$interval"
+            continue
+        fi
+
+        if [ "$ts_required" = "1" ] && ! is_tailscale_up; then
+            log "Waiting: tailscale..."
+            sleep "$interval"
+            continue
+        fi
+
+        if [[ -n "$target" ]]; then
+            if ! can_reach_target_445 "$target"; then
+                log "Waiting: $target:445..."
+                sleep "$interval"
+                continue
+            fi
+        fi
+
+        return 0
+    done
+}
+
+main() {
+    local timeout="90"
+    local interval="2"
+    local target=""
+    local ts_required="0"
+
+    while (( $# )); do
+        case "$1" in
+            --timeout) timeout="$2"; shift 2 ;;
+            --interval) interval="$2"; shift 2 ;;
+            --target) target="$2"; shift 2 ;;
+            --ts-required) ts_required="1"; shift ;;
+            -h|--help) usage; exit 0 ;;
+            *) usage >&2; exit 2 ;;
+        esac
+    done
+
+    wait_for_connectivity "$timeout" "$interval" "$target" "$ts_required"
+}
+
+main "$@"
