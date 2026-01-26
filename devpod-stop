@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+    cat <<END >&2
+Usage: ${0##*/} [OPTIONS] [WORKSPACE...]
+
+Stop DevPod workspace(s). By default, stops all running workspaces.
+Can also stop specific workspaces by name or stop all workspaces regardless of status.
+
+Options:
+  -a    Stop all workspaces regardless of status
+  -q    Suppress output (uses --silent flag)
+  -h    Show this help message
+
+Examples:
+  ${0##*/}                    Stop all running workspaces
+  ${0##*/} -a                Stop all workspaces
+  ${0##*/} workspace1 workspace2  Stop specific workspaces
+  ${0##*/} -q                Stop all running workspaces silently
+END
+    exit 1
+}
+
+stop_all=0
+quiet=0
+workspaces=()
+stop_flags=()
+
+msg() {
+    if [ $quiet -eq 0 ]; then
+        echo "$@" >&2
+    fi
+}
+
+get_workspace_ids() {
+    local all_workspaces
+    local workspace_ids
+
+    if [ $# -gt 0 ]; then
+        for arg; do
+            echo "$arg"
+        done
+        return 0
+    fi
+
+    all_workspaces=$(devpod list --output json 2>/dev/null || echo "[]")
+    if [ "$all_workspaces" = "[]" ] || [ -z "$all_workspaces" ]; then
+        msg "No DevPod workspaces found"
+        return 1
+    fi
+
+    if [ $stop_all -eq 1 ]; then
+        echo "$all_workspaces" | jq -r '.[].id'
+    else
+        echo "$all_workspaces" | jq -r '.[].id' | \
+            tr '\n' '\0' | \
+            xargs -0 -n 1 bash -c 'devpod status --output json "$1" 2>/dev/null | jq -c .' - | \
+            jq -r -s '.[] | select(.state == "Running") | .id'
+    fi
+}
+
+process_arguments() {
+    local opt
+
+    while getopts :aqh opt; do
+        case "$opt" in
+            a)
+                stop_all=1
+                ;;
+            q)
+                quiet=1
+                ;;
+            h)
+                usage
+                ;;
+            \?)
+                msg "Unknown option: -$OPTARG"
+                usage
+                ;;
+            :)
+                msg "Option -$OPTARG requires an argument"
+                usage
+                ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+    workspaces=("$@")
+    if [ $quiet -eq 1 ]; then
+        stop_flags+=("--silent")
+    fi
+}
+
+main() {
+    local workspace_ids
+
+    process_arguments "$@"
+
+    if ! command -v devpod >/dev/null 2>&1; then
+        msg "Error: devpod command not found"
+        exit 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        msg "Error: jq command not found"
+        exit 1
+    fi
+
+    workspace_ids=$(get_workspace_ids "${workspaces[@]}")
+    if [ $? -ne 0 ] || [ -z "$workspace_ids" ]; then
+        if [ ${#workspaces[@]} -eq 0 ] && [ $stop_all -eq 0 ]; then
+            msg "No running DevPod workspaces found"
+        fi
+        return 0
+    fi
+
+    echo "$workspace_ids" | while IFS= read -r workspace_id; do
+        if [ -z "$workspace_id" ]; then
+            continue
+        fi
+
+        msg "Stopping workspace: $workspace_id"
+        devpod stop "${stop_flags[@]}" "$workspace_id" >/dev/null
+    done
+}
+
+main "$@"
