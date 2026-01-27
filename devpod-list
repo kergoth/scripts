@@ -325,39 +325,21 @@ def output_plain(data, date_format="relative"):
     print("Name\tSource\tMachine\tProvider\tIDE\tStatus\tLast Used\tAge")
 
     for workspace in data:
-        workspace_id = str(workspace.get("id", ""))
+        workspace_id = workspace.get("id", "")
 
-        # Handle source field (can have localFolder, gitRepository, etc.)
-        source_data = workspace.get("source", "")
-        if isinstance(source_data, dict):
-            source = (
-                source_data.get("localFolder") or
-                source_data.get("gitRepository") or
-                source_data.get("image") or
-                str(source_data)
-            )
-        else:
-            source = str(source_data) if source_data else ""
+        source_data = workspace.get("source", {})
+        source = (
+            source_data.get("localFolder") or
+            source_data.get("gitRepository") or
+            source_data.get("image") or
+            ""
+        )
 
-        machine_data = workspace.get("machine", "")
-        if isinstance(machine_data, dict):
-            machine = str(machine_data.get("id", ""))
-        else:
-            machine = str(machine_data) if machine_data else ""
+        machine = workspace.get("machine", {}).get("id", "")
+        provider = workspace.get("provider", {}).get("name", "")
+        ide = workspace.get("ide", {}).get("name", "")
 
-        provider_data = workspace.get("provider", "")
-        if isinstance(provider_data, dict):
-            provider = str(provider_data.get("name", ""))
-        else:
-            provider = str(provider_data) if provider_data else ""
-
-        ide_data = workspace.get("ide", "")
-        if isinstance(ide_data, dict):
-            ide = str(ide_data.get("name", ""))
-        else:
-            ide = str(ide_data) if ide_data else ""
-
-        status = str(workspace.get("status", "Unknown"))
+        status = workspace.get("status", "Unknown")
         last_used = workspace.get("lastUsed", "")
         creation_time = workspace.get("creationTimestamp", "")
 
