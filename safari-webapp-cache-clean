@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# Clean Safari web app caches
+#
+# Usage: safari-webapp-cache-clean [options]
+#
+# Clean cache directories for all Safari web apps. Safari web apps
+# can accumulate significant cache data that is safe to remove and
+# will be regenerated on next use.
+#
+# Options:
+#   -n    Dry run, don't actually delete anything
+#   -v    Increase verbosity, can be specified multiple times
+#   -q    Decrease verbosity, can be specified multiple times
+#   -h    Show this help message
+
+set -euo pipefail
+
+scriptname=${BASH_SOURCE[0]##*/}
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "$0" | sed 's/^# *//'
+}
+
+process_arguments() {
+    dry_run=0
+    verbosity=0
+
+    while getopts "nvqh" opt; do
+        case "$opt" in
+            n)
+                dry_run=1
+                ;;
+            v)
+                verbosity=$((verbosity + 1))
+                ;;
+            q)
+                verbosity=$((verbosity - 1))
+                ;;
+            h)
+                show_help
+                exit 0
+                ;;
+            \?)
+                echo "Unknown option: -$OPTARG" >&2
+                show_help >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    if [ $# -gt 0 ]; then
+        echo "Error: This script takes no arguments" >&2
+        show_help >&2
+        exit 1
+    fi
+}
+
+msg() {
+    local fmt=$1
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf "$fmt\n" "$@" >&2
+}
+
+msg_color() {
+    local color=$1
+    shift
+    local fmt=$1
+    shift
+    # shellcheck disable=SC2059
+    if [ -n "${NO_COLOR:-}" ] || { [ -z "${COLOR:-}" ] && ! [ -t 1 ]; }; then
+        printf "${fmt}\n" "$@" >&2
+        return
+    else
+        printf "\033[${color}m${fmt}\033[0m\n" "$@" >&2
+    fi
+}
+
+msg_green() {
+    msg_color "32" "$@"
+}
+
+msg_yellow() {
+    msg_color "33" "$@"
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg_yellow "$@"
+    fi
+}
+
+msg_debug() {
+    if [ "${verbosity:-0}" -gt 1 ]; then
+        msg "$@"
+    fi
+}
+
+find_webapp_caches() {
+    local webapp_base=$1
+
+    if [ ! -d "$webapp_base" ]; then
+        return
+    fi
+
+    find "$webapp_base" -type d -name "Caches" -path "*/Library/Caches" 2>/dev/null
+}
+
+get_webapp_id() {
+    local cache_dir=$1
+    basename "$(dirname "$(dirname "$cache_dir")")"
+}
+
+clean_webapp_cache() {
+    local cache_dir=$1
+    local webapp_id
+    webapp_id=$(get_webapp_id "$cache_dir")
+
+    if [ ! -d "$cache_dir" ]; then
+        msg_debug "Cache dir does not exist: %s" "$cache_dir"
+        return
+    fi
+
+    local size
+    size=$(du -sh "$cache_dir" 2>/dev/null | cut -f1)
+
+    msg_verbose "Cleaning %s (%s)" "$webapp_id" "$size"
+
+    if [ "$dry_run" = "0" ]; then
+        rm -rf "${cache_dir:?}"/* 2>/dev/null
+    fi
+}
+
+calculate_total_size() {
+    local webapp_base=$1
+    du -shc "$webapp_base"/*/Library/Caches 2>/dev/null | tail -1 | cut -f1
+}
+
+main() {
+    process_arguments "$@"
+
+    local webapp_base="$HOME/Library/Containers/com.apple.Safari.WebApp/Data/Library/Containers"
+
+    if [ ! -d "$webapp_base" ]; then
+        msg "No Safari web apps found"
+        exit 0
+    fi
+
+    local webapp_count
+    webapp_count=$(find "$webapp_base" -type d -maxdepth 1 -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
+
+    if [ "$webapp_count" -eq 0 ]; then
+        msg "No Safari web apps found"
+        exit 0
+    fi
+
+    local initial_size
+    initial_size=$(calculate_total_size "$webapp_base")
+
+    msg "Found %d Safari web apps with %s of caches" "$webapp_count" "$initial_size"
+
+    if [ "$dry_run" = "1" ]; then
+        msg_yellow "Dry run mode - no files will be deleted"
+    fi
+
+    local cleaned=0
+    while IFS= read -r cache_dir; do
+        clean_webapp_cache "$cache_dir"
+        cleaned=$((cleaned + 1))
+    done < <(find_webapp_caches "$webapp_base")
+
+    if [ "$dry_run" = "0" ]; then
+        local final_size
+        final_size=$(calculate_total_size "$webapp_base")
+        msg_green "Cleaned %d Safari web app caches" "$cleaned"
+        msg "Size reduced from %s to %s" "$initial_size" "$final_size"
+    else
+        msg "Would clean %d Safari web app caches" "$cleaned"
+    fi
+}
+
+main "$@"
