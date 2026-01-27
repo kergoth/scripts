@@ -1,0 +1,399 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = ["rich"]
+# ///
+
+"""
+DevPod Workspaces List Script
+
+Lists devpod workspaces with their container status, formatted with rich tables
+and supporting multiple output formats.
+"""
+
+import argparse
+import json
+import subprocess
+import sys
+import csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from io import StringIO
+
+from rich.console import Console
+from rich.table import Table
+
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="List devpod workspaces with their status"
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        choices=["auto", "rich", "plain", "json", "csv"],
+        default="auto",
+        help="Output format (default: auto - rich if tty, plain otherwise)",
+    )
+    parser.add_argument(
+        "--date",
+        "-d",
+        choices=["relative", "iso", "short", "unix"],
+        default="relative",
+        help="Date format (default: relative)",
+    )
+    return parser.parse_args()
+
+
+def run_command(cmd):
+    """Run a shell command and return the output."""
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        print(f"Error running command: {cmd}", file=sys.stderr)
+        print(f"Error: {e.stderr}", file=sys.stderr)
+        return None
+
+
+def fetch_workspaces():
+    """Fetch list of all workspaces from devpod."""
+    output = run_command("devpod list --output json")
+    if not output:
+        return []
+
+    try:
+        workspaces = json.loads(output)
+        return workspaces if workspaces else []
+    except json.JSONDecodeError:
+        print("Error parsing devpod list output", file=sys.stderr)
+        return []
+
+
+def fetch_workspace_status(workspace_id):
+    """Fetch status for a specific workspace."""
+    output = run_command(f"devpod status --output json {workspace_id}")
+    if not output:
+        return "Unknown"
+
+    try:
+        status_data = json.loads(output)
+        state = status_data.get("state", "Unknown")
+
+        # Map "NotFound" to "Stopped" since the workspace exists,
+        # only the container doesn't exist yet
+        if state == "NotFound":
+            return "Stopped"
+
+        return state
+    except json.JSONDecodeError:
+        return "Unknown"
+
+
+def fetch_all_statuses(workspaces):
+    """Fetch statuses for all workspaces in parallel."""
+    statuses = {}
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_id = {
+            executor.submit(fetch_workspace_status, ws.get("id", "")): ws.get("id", "")
+            for ws in workspaces
+        }
+
+        for future in as_completed(future_to_id):
+            workspace_id = future_to_id[future]
+            try:
+                status = future.result()
+                statuses[workspace_id] = status
+            except Exception as e:
+                print(f"Error fetching status for {workspace_id}: {e}", file=sys.stderr)
+                statuses[workspace_id] = "Unknown"
+
+    return statuses
+
+
+def combine_data(workspaces, statuses):
+    """Combine workspace data with their statuses."""
+    for workspace in workspaces:
+        workspace_id = workspace.get("id", "")
+        workspace["status"] = statuses.get(workspace_id, "Unknown")
+    return workspaces
+
+
+def format_time_ago(timestamp_str):
+    """Convert timestamp to human-readable 'time ago' format."""
+    if not timestamp_str:
+        return "Never"
+
+    try:
+        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        diff = now - timestamp
+
+        seconds = diff.total_seconds()
+
+        if seconds < 60:
+            return "just now"
+        elif seconds < 3600:
+            minutes = int(seconds / 60)
+            return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+        elif seconds < 86400:
+            hours = int(seconds / 3600)
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        elif seconds < 604800:
+            days = int(seconds / 86400)
+            return f"{days} day{'s' if days != 1 else ''} ago"
+        elif seconds < 2592000:
+            weeks = int(seconds / 604800)
+            return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+        elif seconds < 31536000:
+            months = int(seconds / 2592000)
+            return f"{months} month{'s' if months != 1 else ''} ago"
+        else:
+            years = int(seconds / 31536000)
+            return f"{years} year{'s' if years != 1 else ''} ago"
+    except (ValueError, AttributeError):
+        return "Unknown"
+
+
+def format_timestamp(timestamp_str, date_format):
+    """Format timestamp according to the specified date format.
+
+    Args:
+        timestamp_str: ISO 8601 timestamp string
+        date_format: One of "relative", "iso", "short", "unix"
+
+    Returns:
+        Formatted timestamp string
+    """
+    if not timestamp_str:
+        return "Never" if date_format == "relative" else ""
+
+    try:
+        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+
+        if date_format == "relative":
+            return format_time_ago(timestamp_str)
+        elif date_format == "iso":
+            return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        elif date_format == "short":
+            return timestamp.strftime("%Y-%m-%d")
+        elif date_format == "unix":
+            return str(int(timestamp.timestamp()))
+        else:
+            return format_time_ago(timestamp_str)
+    except (ValueError, AttributeError):
+        return "Unknown"
+
+
+def get_status_color(status):
+    """Get color for status based on state."""
+    status_lower = status.lower()
+    if "running" in status_lower:
+        return "green"
+    elif "stopped" in status_lower:
+        return "red"
+    else:
+        return "yellow"
+
+
+def get_time_color(timestamp_str):
+    """Get color for timestamp based on recency."""
+    if not timestamp_str or timestamp_str == "Never":
+        return "dim"
+
+    try:
+        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        diff = now - timestamp
+        seconds = diff.total_seconds()
+
+        if seconds < 86400:
+            return "green"
+        elif seconds < 604800:
+            return "yellow"
+        else:
+            return "dim"
+    except (ValueError, AttributeError):
+        return "dim"
+
+
+def output_json(data):
+    """Output data as JSON."""
+    print(json.dumps(data, indent=2))
+
+
+def output_csv(data, date_format="relative"):
+    """Output data as CSV."""
+    if not data:
+        return
+
+    output = StringIO()
+    fieldnames = ["name", "source", "machine", "provider", "ide", "status", "last_used", "age"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+
+    writer.writeheader()
+    for workspace in data:
+        source_data = workspace.get("source", {})
+        source = (
+            source_data.get("localFolder") or
+            source_data.get("gitRepository") or
+            source_data.get("image") or
+            ""
+        )
+
+        machine = workspace.get("machine", {}).get("id", "")
+        provider = workspace.get("provider", {}).get("name", "")
+        ide = workspace.get("ide", {}).get("name", "")
+
+        writer.writerow({
+            "name": workspace.get("id", ""),
+            "source": source,
+            "machine": machine,
+            "provider": provider,
+            "ide": ide,
+            "status": workspace.get("status", "Unknown"),
+            "last_used": format_timestamp(workspace.get("lastUsed", ""), date_format),
+            "age": format_timestamp(workspace.get("creationTimestamp", ""), date_format),
+        })
+
+    print(output.getvalue(), end="")
+
+
+def output_rich(data, date_format="relative"):
+    """Output data as a rich formatted table."""
+    console = Console()
+    table = Table(show_header=True, header_style="bold magenta")
+
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Source", style="white")
+    table.add_column("Machine", style="white")
+    table.add_column("Provider", style="magenta")
+    table.add_column("IDE", style="blue")
+    table.add_column("Status")
+    table.add_column("Last Used")
+    table.add_column("Age")
+
+    for workspace in data:
+        workspace_id = workspace.get("id", "")
+
+        source_data = workspace.get("source", {})
+        source = (
+            source_data.get("localFolder") or
+            source_data.get("gitRepository") or
+            source_data.get("image") or
+            ""
+        )
+
+        machine = workspace.get("machine", {}).get("id", "")
+        provider = workspace.get("provider", {}).get("name", "")
+        ide = workspace.get("ide", {}).get("name", "")
+
+        status = workspace.get("status", "Unknown")
+        last_used = workspace.get("lastUsed", "")
+        creation_time = workspace.get("creationTimestamp", "")
+
+        last_used_formatted = format_timestamp(last_used, date_format)
+        age_formatted = format_timestamp(creation_time, date_format)
+
+        status_color = get_status_color(status)
+        last_used_color = get_time_color(last_used)
+        age_color = get_time_color(creation_time)
+
+        table.add_row(
+            workspace_id,
+            source,
+            machine,
+            provider,
+            ide,
+            f"[{status_color}]{status}[/{status_color}]",
+            f"[{last_used_color}]{last_used_formatted}[/{last_used_color}]",
+            f"[{age_color}]{age_formatted}[/{age_color}]",
+        )
+
+    console.print(table)
+
+
+def output_plain(data, date_format="relative"):
+    """Output data as tab-separated values."""
+    print("Name\tSource\tMachine\tProvider\tIDE\tStatus\tLast Used\tAge")
+
+    for workspace in data:
+        workspace_id = str(workspace.get("id", ""))
+
+        # Handle source field (can have localFolder, gitRepository, etc.)
+        source_data = workspace.get("source", "")
+        if isinstance(source_data, dict):
+            source = (
+                source_data.get("localFolder") or
+                source_data.get("gitRepository") or
+                source_data.get("image") or
+                str(source_data)
+            )
+        else:
+            source = str(source_data) if source_data else ""
+
+        machine_data = workspace.get("machine", "")
+        if isinstance(machine_data, dict):
+            machine = str(machine_data.get("id", ""))
+        else:
+            machine = str(machine_data) if machine_data else ""
+
+        provider_data = workspace.get("provider", "")
+        if isinstance(provider_data, dict):
+            provider = str(provider_data.get("name", ""))
+        else:
+            provider = str(provider_data) if provider_data else ""
+
+        ide_data = workspace.get("ide", "")
+        if isinstance(ide_data, dict):
+            ide = str(ide_data.get("name", ""))
+        else:
+            ide = str(ide_data) if ide_data else ""
+
+        status = str(workspace.get("status", "Unknown"))
+        last_used = workspace.get("lastUsed", "")
+        creation_time = workspace.get("creationTimestamp", "")
+
+        last_used_formatted = format_timestamp(last_used, date_format)
+        age_formatted = format_timestamp(creation_time, date_format)
+
+        print(f"{workspace_id}\t{source}\t{machine}\t{provider}\t{ide}\t{status}\t{last_used_formatted}\t{age_formatted}")
+
+
+def main():
+    """Main entry point."""
+    args = parse_args()
+
+    workspaces = fetch_workspaces()
+
+    if not workspaces:
+        print("No workspaces found", file=sys.stderr)
+        sys.exit(0)
+
+    statuses = fetch_all_statuses(workspaces)
+
+    combined_data = combine_data(workspaces, statuses)
+
+    output_format = args.output
+    if output_format == "auto":
+        output_format = "rich" if sys.stdout.isatty() else "plain"
+
+    if output_format == "json":
+        output_json(combined_data)
+    elif output_format == "csv":
+        output_csv(combined_data, args.date)
+    elif output_format == "rich":
+        output_rich(combined_data, args.date)
+    else:  # plain
+        output_plain(combined_data, args.date)
+
+
+if __name__ == "__main__":
+    main()
