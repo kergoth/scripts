@@ -362,6 +362,10 @@ def main():
     statuses = fetch_all_statuses(workspaces)
 
     combined_data = combine_data(workspaces, statuses)
+    status_value_order = ["Unknown", "Pending", "Stopped", "Error", "Running"]
+    combined_data = sorted(combined_data,
+        key=lambda x: (status_value_order.index(x.get("status", "Unknown")), format_timestamp(x.get("lastUsed", ""), "unix")),
+        reverse=True)
 
     output_format = args.output
     if output_format == "auto":
