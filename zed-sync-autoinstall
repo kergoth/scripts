@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+# Usage: zed-sync-autoinstall [options] [extension...]
+#
+# Sync installed Zed extensions to the auto_install_extensions section
+# of the Zed settings file. By default, reads all installed extensions
+# from the extensions directory. If extension names are provided as
+# arguments, only those extensions are added.
+#
+# Options:
+#     -r          Remove extensions not in the source list
+#     -n          Dry run, don't actually modify settings
+#     -v          Increase verbosity, can be specified multiple times
+#     -q          Decrease verbosity, can be specified multiple times
+#     -h          Show this help message
+
+set -euo pipefail
+
+scriptname=${BASH_SOURCE[0]##*/}
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "$0" | sed 's/^# *//'
+}
+
+process_arguments() {
+    while getopts "rnvqh" opt; do
+        case $opt in
+            r)
+                remove_mode=1
+                ;;
+            n)
+                dry_run=1
+                ;;
+            v)
+                verbosity=$((verbosity + 1))
+                ;;
+            q)
+                verbosity=$((verbosity - 1))
+                ;;
+            h)
+                show_help
+                exit 0
+                ;;
+            \?)
+                echo "Unknown option: -$OPTARG" >&2
+                show_help >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    extensions=("$@")
+}
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf "$fmt\n" "$@" >&2
+}
+
+msg_color() {
+    local color=$1
+    shift
+    local msg=$1
+    shift
+    # shellcheck disable=SC2059
+    if [ -n "${NO_COLOR:-}" ] || { [ -z "${COLOR:-}" ] && ! [ -t 1 ]; }; then
+        printf "${msg}\n" "$@" >&2
+        return
+    else
+        printf "\033[${color}m${msg}\033[0m\n" "$@" >&2
+    fi
+}
+
+msg_blue() {
+    msg_color "34" "$@"
+}
+
+msg_green() {
+    msg_color "32" "$@"
+}
+
+msg_red() {
+    msg_color "31" "$@"
+}
+
+msg_yellow() {
+    msg_color "33" "$@"
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg_yellow "$@"
+    fi
+}
+
+msg_debug() {
+    if [ "${verbosity:-0}" -gt 1 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg_red "$@"
+    exit 1
+}
+
+get_platform() {
+    case "$(uname -s)" in
+        Darwin)
+            echo "macos"
+            ;;
+        Linux)
+            echo "linux"
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            echo "windows"
+            ;;
+        *)
+            die "Unsupported platform: $(uname -s)"
+            ;;
+    esac
+}
+
+get_config_path() {
+    local platform=$1
+    case "$platform" in
+        macos|linux)
+            echo "${XDG_CONFIG_HOME:-$HOME/.config}/zed/settings.json"
+            ;;
+        windows)
+            echo "${APPDATA}/Zed/settings.json"
+            ;;
+        *)
+            die "Unknown platform: $platform"
+            ;;
+    esac
+}
+
+get_extensions_path() {
+    local platform=$1
+    case "$platform" in
+        macos)
+            echo "$HOME/Library/Application Support/Zed/extensions"
+            ;;
+        linux)
+            echo "${XDG_DATA_HOME:-$HOME/.local/share}/zed/extensions"
+            ;;
+        windows)
+            echo "${LOCALAPPDATA}/Zed/extensions"
+            ;;
+        *)
+            die "Unknown platform: $platform"
+            ;;
+    esac
+}
+
+get_installed_extensions() {
+    local extensions_path=$1
+    local index_file="$extensions_path/index.json"
+
+    if [ ! -f "$index_file" ]; then
+        die "Extensions index not found: $index_file"
+    fi
+
+    msg_debug "Reading installed extensions from: $index_file"
+    jq -r '.extensions | keys[]' "$index_file" 2>/dev/null || die "Failed to parse index.json"
+}
+
+get_current_autoinstall() {
+    local config_path=$1
+
+    if [ ! -f "$config_path" ]; then
+        msg_verbose "Config file not found, will create: $config_path"
+        echo "{}"
+        return
+    fi
+
+    msg_debug "Reading current auto_install_extensions from: $config_path"
+
+    # Extract just the auto_install_extensions block using awk
+    local block
+    block=$(awk '
+    BEGIN {
+        in_block = 0
+        depth = 0
+        first_entry = 1
+    }
+
+    /^[[:space:]]*"auto_install_extensions"[[:space:]]*:/ {
+        in_block = 1
+        depth = 0
+        # Count braces on this line
+        for (i = 1; i <= length($0); i++) {
+            char = substr($0, i, 1)
+            if (char == "{") depth++
+        }
+        next
+    }
+
+    in_block {
+        # Remove inline comments
+        line = $0
+        gsub(/[[:space:]]*\/\/.*/, "", line)
+
+        # Count braces
+        for (i = 1; i <= length($0); i++) {
+            char = substr($0, i, 1)
+            if (char == "{") depth++
+            if (char == "}") depth--
+        }
+
+        if (depth <= 0) {
+            in_block = 0
+        } else {
+            # Clean up the line
+            gsub(/^[[:space:]]+/, "", line)
+            gsub(/,*[[:space:]]*$/, "", line)
+
+            # Only process non-empty lines
+            if (line != "") {
+                if (first_entry) {
+                    printf "{%s", line
+                    first_entry = 0
+                } else {
+                    printf ",%s", line
+                }
+            }
+        }
+    }
+
+    END {
+        printf "}"
+    }
+    ' "$config_path")
+
+    if [ "$block" = "{}" ] || [ -z "$block" ]; then
+        echo "{}"
+    else
+        echo "$block" | jq -c '.' 2>/dev/null || echo "{}"
+    fi
+}
+
+generate_autoinstall_block() {
+    local -n exts=$1
+    local base_indent=${2:-2}
+    local base_spaces
+    local entry_spaces
+    base_spaces=$(printf '%*s' $base_indent '')
+    entry_spaces=$(printf '%*s' $((base_indent + 2)) '')
+
+    echo "${base_spaces}\"auto_install_extensions\": {"
+
+    local first=1
+    for ext in "${exts[@]}"; do
+        if [ $first -eq 0 ]; then
+            echo ","
+        fi
+        first=0
+        printf '%s"%s": true' "$entry_spaces" "$ext"
+    done
+
+    if [ ${#exts[@]} -gt 0 ]; then
+        echo ""
+    fi
+
+    echo "${base_spaces}},"
+}
+
+replace_autoinstall_block() {
+    local config_path=$1
+    local new_block=$2
+    local tmpfile="$tmpdir/settings.json"
+    local blockfile="$tmpdir/new_block.txt"
+
+    msg_debug "Replacing auto_install_extensions block"
+
+    echo "$new_block" > "$blockfile"
+
+    awk -v blockfile="$blockfile" '
+    BEGIN {
+        in_block = 0
+        depth = 0
+        found_block = 0
+    }
+
+    /^[[:space:]]*"auto_install_extensions"[[:space:]]*:/ {
+        in_block = 1
+        found_block = 1
+        depth = 0
+        while ((getline line < blockfile) > 0) {
+            print line
+        }
+        close(blockfile)
+
+        # Count braces on this line to start tracking depth
+        for (i = 1; i <= length($0); i++) {
+            char = substr($0, i, 1)
+            if (char == "{") depth++
+        }
+        next
+    }
+
+    in_block {
+        # Count braces to track depth
+        for (i = 1; i <= length($0); i++) {
+            char = substr($0, i, 1)
+            if (char == "{") depth++
+            if (char == "}") depth--
+        }
+
+        # When depth reaches 0, we found the closing brace
+        if (depth <= 0) {
+            in_block = 0
+        }
+        next
+    }
+
+    !in_block {
+        # If this is the final closing brace and we haven'\''t found the block, insert it
+        if (!found_block && /^}[[:space:]]*$/) {
+            while ((getline line < blockfile) > 0) {
+                print line
+            }
+            close(blockfile)
+            found_block = 1
+        }
+        print
+    }
+    ' "$config_path" > "$tmpfile"
+
+    if [ ! -s "$tmpfile" ]; then
+        die "Failed to generate updated config (empty output)"
+    fi
+
+    echo "$tmpfile"
+}
+
+main() {
+    local dry_run=0
+    local remove_mode=0
+    local verbosity=0
+    local extensions=()
+
+    process_arguments "$@"
+
+    local platform
+    platform=$(get_platform)
+    msg_verbose "Detected platform: $platform"
+
+    local config_path
+    config_path=$(get_config_path "$platform")
+    msg_verbose "Config path: $config_path"
+
+    local extensions_path
+    extensions_path=$(get_extensions_path "$platform")
+    msg_verbose "Extensions path: $extensions_path"
+
+    local target_extensions=()
+
+    if [ ${#extensions[@]} -gt 0 ]; then
+        msg_verbose "Using extensions from command line: ${extensions[*]}"
+        target_extensions=("${extensions[@]}")
+    else
+        msg_verbose "Reading installed extensions"
+        mapfile -t target_extensions < <(get_installed_extensions "$extensions_path" | sort)
+        msg_verbose "Found ${#target_extensions[@]} installed extensions"
+    fi
+
+    if [ ${#target_extensions[@]} -eq 0 ]; then
+        die "No extensions to add"
+    fi
+
+    local current_autoinstall
+    current_autoinstall=$(get_current_autoinstall "$config_path")
+    msg_debug "Current auto_install_extensions: $current_autoinstall"
+
+    local final_extensions=()
+
+    if [ "$remove_mode" -eq 1 ]; then
+        msg_verbose "Remove mode enabled: only keeping specified extensions"
+        final_extensions=("${target_extensions[@]}")
+    else
+        local -A seen
+        for ext in "${target_extensions[@]}"; do
+            seen["$ext"]=1
+        done
+
+        while IFS= read -r ext; do
+            if [ -n "$ext" ]; then
+                seen["$ext"]=1
+            fi
+        done < <(echo "$current_autoinstall" | jq -r 'keys[]' 2>/dev/null || true)
+
+        for ext in "${!seen[@]}"; do
+            final_extensions+=("$ext")
+        done
+
+        IFS=$'\n' final_extensions=($(sort <<<"${final_extensions[*]}"))
+        unset IFS
+    fi
+
+    msg_verbose "Final extension count: ${#final_extensions[@]}"
+
+    local new_block
+    new_block=$(generate_autoinstall_block final_extensions)
+
+    local tmpfile
+    tmpfile=$(replace_autoinstall_block "$config_path" "$new_block")
+
+    if [ "$dry_run" -eq 1 ]; then
+        msg_green "Dry run - showing diff:"
+        echo ""
+        diff -u "$config_path" "$tmpfile" || true
+        echo ""
+        msg_yellow "No changes made (dry run mode)"
+    else
+        if diff -q "$config_path" "$tmpfile" >/dev/null 2>&1; then
+            msg_green "No changes needed - settings already up to date"
+        else
+            msg_verbose "Writing updated config to: $config_path"
+            cp "$tmpfile" "$config_path"
+            msg_green "Successfully updated auto_install_extensions"
+            msg "Added/updated ${#final_extensions[@]} extensions"
+        fi
+    fi
+}
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+main "$@"
