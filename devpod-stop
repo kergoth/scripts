@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+DEFAULT_TIMEOUT=30
+POLL_INTERVAL=1
+RETRY_TIMEOUT=15
+
 usage() {
     cat <<END >&2
 Usage: ${0##*/} [OPTIONS] [WORKSPACE...]
@@ -9,24 +13,31 @@ Usage: ${0##*/} [OPTIONS] [WORKSPACE...]
 Stop DevPod workspace(s). By default, stops all running workspaces.
 Can also stop specific workspaces by name or stop all workspaces regardless of status.
 
+Stops are issued in parallel, then monitored until confirmed stopped.
+If workspaces don't stop within the timeout, escalates through:
+  1. Lock file removal + retry stop
+  2. Direct docker container stop
+
 Options:
-  -a    Stop all workspaces regardless of status
-  -q    Suppress output (uses --silent flag)
-  -h    Show this help message
+  -a      Stop all workspaces regardless of status
+  -t SECS Timeout in seconds waiting for stop (default: $DEFAULT_TIMEOUT)
+  -q      Suppress output
+  -h      Show this help message
 
 Examples:
-  ${0##*/}                    Stop all running workspaces
-  ${0##*/} -a                Stop all workspaces
-  ${0##*/} workspace1 workspace2  Stop specific workspaces
-  ${0##*/} -q                Stop all running workspaces silently
+  ${0##*/}                         Stop all running workspaces
+  ${0##*/} -a                      Stop all workspaces
+  ${0##*/} workspace1 workspace2   Stop specific workspaces
+  ${0##*/} -t 120                  Stop with 2 minute timeout
+  ${0##*/} -q                      Stop all running workspaces silently
 END
     exit 1
 }
 
 stop_all=0
 quiet=0
+timeout=$DEFAULT_TIMEOUT
 workspaces=()
-stop_flags=()
 
 msg() {
     if [ $quiet -eq 0 ]; then
@@ -34,96 +45,229 @@ msg() {
     fi
 }
 
-get_workspace_ids() {
-    local all_workspaces
-    local workspace_ids
+get_workspace_state() {
+    devpod status --output json --timeout 10s "$1" 2>/dev/null \
+        | jq -r '.state // "Unknown"'
+}
 
+get_workspace_ids() {
     if [ $# -gt 0 ]; then
-        for arg; do
-            echo "$arg"
-        done
+        printf '%s\n' "$@"
         return 0
     fi
 
+    local all_workspaces
     all_workspaces=$(devpod list --output json 2>/dev/null || echo "[]")
     if [ "$all_workspaces" = "[]" ] || [ -z "$all_workspaces" ]; then
-        msg "No DevPod workspaces found"
         return 1
     fi
 
+    local all_ids
+    all_ids=$(echo "$all_workspaces" | jq -r '.[].id')
+
     if [ $stop_all -eq 1 ]; then
-        echo "$all_workspaces" | jq -r '.[].id'
-    else
-        echo "$all_workspaces" | jq -r '.[].id' | \
-            tr '\n' '\0' | \
-            xargs -0 -n 1 bash -c 'devpod status --output json "$1" 2>/dev/null | jq -c .' - | \
-            jq -r -s '.[] | select(.state == "Running") | .id'
+        echo "$all_ids"
+        return 0
     fi
+
+    local running_ids
+    running_ids=$(
+        while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            (
+                state=$(get_workspace_state "$id")
+                if [ "$state" = "Running" ] || [ "$state" = "Busy" ]; then
+                    echo "$id"
+                fi
+            ) &
+        done <<< "$all_ids"
+        wait
+    )
+
+    if [ -z "$running_ids" ]; then
+        return 1
+    fi
+    echo "$running_ids"
+}
+
+wait_for_stopped() {
+    local wait_timeout=$1
+    shift
+    local remaining=("$@")
+    local deadline=$((SECONDS + wait_timeout))
+
+    while [ ${#remaining[@]} -gt 0 ] && [ $SECONDS -lt $deadline ]; do
+        sleep $POLL_INTERVAL
+        local still_running=()
+        for workspace_id in "${remaining[@]}"; do
+            local state
+            state=$(get_workspace_state "$workspace_id") || state="Unknown"
+            case "$state" in
+                Stopped|NotFound)
+                    msg "  Stopped: $workspace_id"
+                    ;;
+                *)
+                    still_running+=("$workspace_id")
+                    devpod stop "$workspace_id" >/dev/null 2>&1 &
+                    ;;
+            esac
+        done
+        if [ ${#still_running[@]} -eq 0 ]; then
+            return 0
+        fi
+        remaining=("${still_running[@]}")
+    done
+
+    if [ ${#remaining[@]} -gt 0 ]; then
+        printf '%s\n' "${remaining[@]}"
+    fi
+}
+
+remove_locks() {
+    local devpod_home="${DEVPOD_HOME:-$HOME/.devpod}"
+    local lock_dir="$devpod_home/contexts/default/locks"
+
+    for workspace_id in "$@"; do
+        local lock_file="$lock_dir/${workspace_id}.lock"
+        if [ -f "$lock_file" ]; then
+            msg "  Removing lock: $lock_file"
+            rm -f "$lock_file"
+        fi
+    done
+}
+
+docker_force_stop() {
+    if ! command -v docker >/dev/null 2>&1; then
+        msg "Warning: docker not found, cannot force-stop containers"
+        return 0
+    fi
+
+    for workspace_id in "$@"; do
+        msg "  Docker stop: $workspace_id"
+        docker stop "$workspace_id" 2>/dev/null || true
+    done
+}
+
+issue_stops() {
+    for workspace_id in "$@"; do
+        msg "  Stopping: $workspace_id"
+        devpod stop "$workspace_id" >/dev/null 2>&1 &
+    done
 }
 
 process_arguments() {
     local opt
-
-    while getopts :aqh opt; do
+    while getopts :aqt:h opt; do
         case "$opt" in
-            a)
-                stop_all=1
-                ;;
-            q)
-                quiet=1
-                ;;
-            h)
-                usage
-                ;;
-            \?)
-                msg "Unknown option: -$OPTARG"
-                usage
-                ;;
-            :)
-                msg "Option -$OPTARG requires an argument"
-                usage
-                ;;
+            a) stop_all=1 ;;
+            q) quiet=1 ;;
+            t) timeout="$OPTARG" ;;
+            h) usage ;;
+            \?) msg "Unknown option: -$OPTARG"; usage ;;
+            :)  msg "Option -$OPTARG requires an argument"; usage ;;
         esac
     done
-
     shift $((OPTIND - 1))
     workspaces=("$@")
-    if [ $quiet -eq 1 ]; then
-        stop_flags+=("--silent")
-    fi
 }
 
 main() {
-    local workspace_ids
-
     process_arguments "$@"
 
     if ! command -v devpod >/dev/null 2>&1; then
         msg "Error: devpod command not found"
         exit 1
     fi
-
     if ! command -v jq >/dev/null 2>&1; then
         msg "Error: jq command not found"
         exit 1
     fi
 
-    workspace_ids=$(get_workspace_ids "${workspaces[@]}")
-    if [ $? -ne 0 ] || [ -z "$workspace_ids" ]; then
+    local workspace_id_output
+    if [ ${#workspaces[@]} -gt 0 ]; then
+        workspace_id_output=$(get_workspace_ids "${workspaces[@]}") || true
+    else
+        workspace_id_output=$(get_workspace_ids) || true
+    fi
+
+    if [ -z "$workspace_id_output" ]; then
         if [ ${#workspaces[@]} -eq 0 ] && [ $stop_all -eq 0 ]; then
             msg "No running DevPod workspaces found"
         fi
         return 0
     fi
 
-    echo "$workspace_ids" | while IFS= read -r workspace_id; do
-        if [ -z "$workspace_id" ]; then
-            continue
-        fi
+    local ids
+    mapfile -t ids < <(printf '%s\n' "$workspace_id_output" | grep .)
 
-        msg "Stopping workspace: $workspace_id"
-        devpod stop "${stop_flags[@]}" "$workspace_id" >/dev/null
+    if [ ${#ids[@]} -eq 0 ]; then
+        msg "No workspaces to stop"
+        return 0
+    fi
+
+    msg "Stopping ${#ids[@]} workspace(s)..."
+    issue_stops "${ids[@]}"
+
+    msg "Waiting for stop (timeout: ${timeout}s)..."
+    local stuck
+    stuck=$(wait_for_stopped "$timeout" "${ids[@]}")
+
+    if [ -z "$stuck" ]; then
+        wait 2>/dev/null || true
+        msg "All workspaces stopped"
+        return 0
+    fi
+
+    local stuck_ids
+    mapfile -t stuck_ids < <(printf '%s\n' "$stuck" | grep .)
+
+    jobs -p 2>/dev/null | xargs kill 2>/dev/null || true
+    wait 2>/dev/null || true
+
+    msg "Still running after ${timeout}s: ${stuck_ids[*]}"
+    msg "Removing lock files and retrying..."
+    remove_locks "${stuck_ids[@]}"
+    issue_stops "${stuck_ids[@]}"
+
+    msg "Waiting for retry (timeout: ${RETRY_TIMEOUT}s)..."
+    stuck=$(wait_for_stopped "$RETRY_TIMEOUT" "${stuck_ids[@]}")
+
+    if [ -z "$stuck" ]; then
+        wait 2>/dev/null || true
+        msg "All workspaces stopped after lock removal"
+        return 0
+    fi
+
+    mapfile -t stuck_ids < <(printf '%s\n' "$stuck" | grep .)
+    jobs -p 2>/dev/null | xargs kill 2>/dev/null || true
+    wait 2>/dev/null || true
+
+    msg "Attempting docker force stop for: ${stuck_ids[*]}"
+    docker_force_stop "${stuck_ids[@]}"
+
+    # Re-issue devpod stop to reconcile devpod's state after docker stop
+    msg "Re-issuing devpod stop..."
+    for workspace_id in "${stuck_ids[@]}"; do
+        devpod stop "$workspace_id" >/dev/null 2>&1 || true
     done
+
+    sleep $POLL_INTERVAL
+    local final_stuck=()
+    for workspace_id in "${stuck_ids[@]}"; do
+        local state
+        state=$(get_workspace_state "$workspace_id") || state="Unknown"
+        if [ "$state" != "Stopped" ] && [ "$state" != "NotFound" ]; then
+            final_stuck+=("$workspace_id")
+        fi
+    done
+
+    if [ ${#final_stuck[@]} -gt 0 ]; then
+        msg "Warning: Failed to stop: ${final_stuck[*]}"
+        msg "Manual intervention required (e.g., devpod delete --force)"
+        return 1
+    fi
+
+    msg "All workspaces stopped"
 }
 
 main "$@"
