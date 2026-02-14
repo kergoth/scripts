@@ -5,7 +5,6 @@
 # dependencies = ["httpx", "rich"]
 # ///
 #
-# TODO: Refactor to move inferred Future LTS out of main()
 # TODO: Validate links. If 404, don't include them in output
 # TODO: Consider alternative release notes links. Older releases in particular
 #       don't have "RELEASENOTES", but other candidates like "RELEASENOTES.txt"
@@ -26,17 +25,19 @@ import io
 import json
 import re
 import sys
-from dataclasses import asdict, dataclass, fields
-from datetime import datetime, timedelta
+import dataclasses
+from dataclasses import dataclass
+from datetime import datetime
 
 import httpx
-import rich
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 WIKI_RAW_URL = "https://wiki.yoctoproject.org/wiki/index.php?title=Releases&action=raw"
-DOWNLOADS_BASE = "https://downloads.yoctoproject.org/releases/yocto"
-MIGRATION_FMT = "https://docs.yoctoproject.org/dev/migration-guides/migration-{version}.html"
+DOWNLOADS_URL_FMT = "https://downloads.yoctoproject.org/releases/yocto/yocto-{version}/"
+RELEASE_NOTES_URL_FMT = "https://downloads.yoctoproject.org/releases/yocto/yocto-{version}/RELEASENOTES"
+MIGRATION_GUIDE_URL_FMT = "https://docs.yoctoproject.org/dev/migration-guides/migration-{series}.html"
 
 MONTHS = {
     "jan": "01",
@@ -102,9 +103,9 @@ DEFAULT_COLUMNS = [
 # Support detail, while useful as a pristine version of the source data, provides
 # little beyond the support status and EOL date. Maintainer, while useful, is
 # increasing the column count beyond a reasonable limit.
-VERBOSE_EXCLUDED_COLUMNS = ["maintainer", "support_detail"]
+VERBOSE_EXCLUDED_COLUMNS = {"maintainer", "support_detail"}
 VERBOSE_COLUMNS = [
-    f.name for f in fields(YoctoRelease) if f.name not in VERBOSE_EXCLUDED_COLUMNS
+    f.name for f in dataclasses.fields(YoctoRelease) if f.name not in VERBOSE_EXCLUDED_COLUMNS
 ]
 
 COLUMN_HEADERS = {
@@ -122,6 +123,27 @@ COLUMN_HEADERS = {
     "release_notes_url": "Release Notes",
     "migration_guide_url": "Migration Guide",
 }
+
+@dataclass
+class WikiRow:
+    """Raw cell values from a single wiki table row."""
+
+    codename: str = ""
+    version: str = ""
+    date: str = ""
+    current: str = ""
+    support: str = ""
+    poky: str = ""
+    bitbake: str = ""
+    maintainer: str = ""
+    notes: str = ""
+
+    @classmethod
+    def from_cells(cls, cells: list[str]) -> WikiRow:
+        """Construct from raw cells, padding or truncating to fit."""
+        n = len(dataclasses.fields(cls))
+        return cls(*(cells + [""] * n)[:n])
+
 
 def fetch_wiki_text() -> str:
     """Fetch raw wikitext from the Yocto Project Releases wiki page."""
@@ -258,7 +280,7 @@ def compute_eol_date(
     if since_match:
         return normalize_date(since_match.group(1))
 
-    if not release_date or release_date == "" or "-" not in release_date:
+    if not release_date or "-" not in release_date:
         return ""
 
     parts = release_date.split("-")
@@ -279,8 +301,8 @@ def compute_eol_date(
     return ""
 
 
-def parse_date(date_str: str) -> datetime.date:
-    """Parse a date string into a datetime.date object."""
+def parse_date(date_str: str) -> datetime.date | None:
+    """Parse a YYYY-MM date string into a date object, or None if unparseable."""
     try:
         return datetime.strptime(date_str, "%Y-%m").date()
     except ValueError:
@@ -295,41 +317,40 @@ def clean_maintainer(raw: str) -> str:
     return cleaned.strip()
 
 
-def make_urls(current_version: str) -> tuple[str, str]:
-    """Construct downloads and release notes URLs from the current version."""
+def make_urls(current_version: str) -> tuple[str, str, str]:
+    """Construct downloads, release notes, and migration guide URLs."""
     if not current_version:
         return "", "", ""
-    series_version = ".".join(current_version.split(".")[:2])
+    series = ".".join(current_version.split(".")[:2])
     return (
-        f"{DOWNLOADS_BASE}/yocto-{current_version}/",
-        f"{DOWNLOADS_BASE}/yocto-{current_version}/RELEASENOTES",
-        str.format(MIGRATION_FMT, version=series_version)
+        DOWNLOADS_URL_FMT.format(version=current_version),
+        RELEASE_NOTES_URL_FMT.format(version=current_version),
+        MIGRATION_GUIDE_URL_FMT.format(series=series),
     )
 
 
 def parse_release_table(wikitext: str) -> list[YoctoRelease]:
     """Parse the wiki release table into a list of YoctoRelease objects."""
     table_text = extract_first_table(wikitext)
-    rows = split_table_rows(table_text)
+    raw_rows = split_table_rows(table_text)
     releases: list[YoctoRelease] = []
 
-    for row in rows:
-        while len(row) < 9:
-            row.append("")
+    for cells in raw_rows:
+        row = WikiRow.from_cells(cells)
 
-        codename = parse_codename(row[0])
+        codename = parse_codename(row.codename)
         if not codename:
             continue
 
-        version = clean_cell(row[1])
+        version = clean_cell(row.version)
         if not version:
             continue
 
-        release_date = normalize_date(clean_cell(row[2]))
-        current_version, current_version_date = parse_current_version(row[3])
-        support_status, support_detail = normalize_support_status(row[4])
-        bitbake_branch = clean_cell(row[6])
-        maintainer = clean_maintainer(row[7])
+        release_date = normalize_date(clean_cell(row.date))
+        current_version, current_version_date = parse_current_version(row.current)
+        support_status, support_detail = normalize_support_status(row.support)
+        bitbake_branch = clean_cell(row.bitbake)
+        maintainer = clean_maintainer(row.maintainer)
         eol_date = compute_eol_date(release_date, support_status, support_detail)
         downloads_url, release_notes_url, migration_guide_url = make_urls(current_version)
 
@@ -354,7 +375,14 @@ def parse_release_table(wikitext: str) -> list[YoctoRelease]:
     return releases
 
 
-def format_rich(
+def _linkify(url: str, label: str) -> Text | str:
+    """Return a rich Text with a clickable hyperlink style, or empty string if no URL."""
+    if not url:
+        return ""
+    return Text(label, style=f"link {url}")
+
+
+def print_rich(
     releases: list[YoctoRelease], verbose: bool = False, hyperlink: bool = False
 ) -> None:
     """Print a styled table to the terminal using rich."""
@@ -365,15 +393,11 @@ def format_rich(
         table.add_column(COLUMN_HEADERS.get(col, col))
 
     for release in releases:
-        data = asdict(release)
+        data = dataclasses.asdict(release)
         if hyperlink:
-            data["downloads_url"] = f"[link={data['downloads_url']}]Download[/link]"
-            data["release_notes_url"] = (
-                f"[link={data['release_notes_url']}]Release Notes[/link]"
-            )
-            data["migration_guide_url"] = (
-                f"[link={data['migration_guide_url']}]Migration Guide[/link]"
-            )
+            data["downloads_url"] = _linkify(data["downloads_url"], "Download")
+            data["release_notes_url"] = _linkify(data["release_notes_url"], "Release Notes")
+            data["migration_guide_url"] = _linkify(data["migration_guide_url"], "Migration Guide")
         values = [data[col] for col in columns]
 
         style = None
@@ -386,8 +410,7 @@ def format_rich(
 
         table.add_row(*values, style=style)
 
-    console = Console()
-    console.print(table)
+    Console().print(table)
 
 
 def format_plain(releases: list[YoctoRelease], verbose: bool = False) -> str:
@@ -397,7 +420,7 @@ def format_plain(releases: list[YoctoRelease], verbose: bool = False) -> str:
 
     rows = []
     for release in releases:
-        data = asdict(release)
+        data = dataclasses.asdict(release)
         rows.append([data[col] for col in columns])
 
     widths = [len(h) for h in headers]
@@ -416,11 +439,11 @@ def format_plain(releases: list[YoctoRelease], verbose: bool = False) -> str:
 def format_csv(releases: list[YoctoRelease], delimiter: str = ',') -> str:
     """Format releases as CSV with all fields."""
     output = io.StringIO()
-    fieldnames = [f.name for f in fields(YoctoRelease)]
+    fieldnames = [f.name for f in dataclasses.fields(YoctoRelease)]
     writer = csv.DictWriter(output, fieldnames=fieldnames, delimiter=delimiter)
     writer.writeheader()
     for release in releases:
-        writer.writerow(asdict(release))
+        writer.writerow(dataclasses.asdict(release))
     return output.getvalue().rstrip("\n")
 
 
@@ -431,7 +454,7 @@ def format_tsv(releases: list[YoctoRelease]) -> str:
 
 def format_json(releases: list[YoctoRelease]) -> str:
     """Format releases as JSON with all fields."""
-    return json.dumps([asdict(r) for r in releases], indent=2)
+    return json.dumps([dataclasses.asdict(r) for r in releases], indent=2)
 
 
 def parse_args() -> argparse.Namespace:
@@ -484,6 +507,33 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def infer_future_lts(releases: list[YoctoRelease]) -> list[YoctoRelease]:
+    """Tag the upcoming release as Future (LTS) if it follows the 2-year LTS cadence."""
+    if not releases or releases[0].support_status != "Future":
+        return releases
+
+    lts_releases = [r for r in releases if r.support_status == "LTS"]
+    if not lts_releases:
+        return releases
+
+    future_date = parse_date(releases[0].release_date)
+    lts_date = parse_date(lts_releases[0].release_date)
+    if not future_date or not lts_date:
+        return releases
+
+    if future_date.month == lts_date.month and future_date.year == lts_date.year + 2:
+        eol_date = f"{future_date.year + 4}-{future_date.month:02d}"
+        updated = dataclasses.replace(
+            releases[0],
+            support_status="Future (LTS)",
+            support_detail=f"Future (LTS) (Until {eol_date})",
+            eol_date=eol_date,
+        )
+        return [updated, *releases[1:]]
+
+    return releases
+
+
 def main() -> int:
     """Entry point."""
     args = parse_args()
@@ -500,19 +550,7 @@ def main() -> int:
         print(f"Error parsing release table: {exc}", file=sys.stderr)
         return 1
 
-    if len(releases) > 0 and releases[0].support_status == "Future":
-        # If the upcoming release is exactly 2 years from the latest LTS release, then we know the future
-        # release is a future LTS, and should tag it as such in its support status.
-        future = releases[0]
-        lts_releases = [r for r in releases if r.support_status == "LTS"]
-        if lts_releases:
-            latest_lts = lts_releases[0]
-            lts_date = parse_date(latest_lts.release_date)
-            future_date = parse_date(future.release_date)
-            if lts_date.month == future_date.month and future_date.year == (lts_date.year + 2):
-                future.support_status = "Future (LTS)"
-                future.eol_date = (future_date + timedelta(weeks=104)).strftime("%Y-%m")
-                future.support_detail = f"Future (LTS) (Until {future.eol_date})"
+    releases = infer_future_lts(releases)
 
     if args.lts_only:
         releases = [r for r in releases if r.support_status in ("Future (LTS)", "LTS", "EOL (LTS)")]
@@ -531,7 +569,7 @@ def main() -> int:
         fmt = "rich" if sys.stdout.isatty() else "plain"
 
     if fmt == "rich":
-        format_rich(releases, verbose=args.verbose, hyperlink=args.hyperlink)
+        print_rich(releases, verbose=args.verbose, hyperlink=args.hyperlink)
     elif fmt == "plain":
         print(format_plain(releases, verbose=args.verbose))
     elif fmt == "csv":
@@ -539,7 +577,7 @@ def main() -> int:
     elif fmt == "tsv":
         print(format_tsv(releases))
     elif fmt == "json":
-        rich.print_json(format_json(releases))
+        print(format_json(releases))
 
     return 0
 
