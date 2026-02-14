@@ -382,10 +382,10 @@ def _linkify(url: str, label: str) -> Text | str:
     return Text(label, style=f"link {url}")
 
 
-def print_rich(
+def format_rich(
     releases: list[YoctoRelease], verbose: bool = False, hyperlink: bool = False
-) -> None:
-    """Print a styled table to the terminal using rich."""
+) -> Table:
+    """Return a styled rich table to the terminal using rich."""
     columns = VERBOSE_COLUMNS if verbose else DEFAULT_COLUMNS
     table = Table(show_header=True, header_style="bold", show_lines=False)
 
@@ -579,7 +579,7 @@ def main() -> int:
         fmt = "rich" if sys.stdout.isatty() else "plain"
 
     if fmt == "rich":
-        print_rich(releases, verbose=args.verbose, hyperlink=args.hyperlink)
+        Console().print(format_rich(releases, verbose=args.verbose, hyperlink=args.hyperlink))
     elif fmt == "plain":
         print(format_plain(releases, verbose=args.verbose))
     elif fmt == "csv":
