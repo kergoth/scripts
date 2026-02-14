@@ -105,9 +105,10 @@ DEFAULT_COLUMNS = [
     "eol_date",
 ]
 
-# Support detail, while useful as a pristine version of the source data, provides
-# little beyond the support status and EOL date. Maintainer, while useful, is
-# increasing the column count beyond a reasonable limit.
+# The 'Support detail' field, while useful as a pristine version of the
+# source data, provides little beyond the support status and EOL date.
+# 'Maintainer', while useful, is increasing the column count beyond a
+# reasonable limit.
 VERBOSE_EXCLUDED_COLUMNS = {"maintainer", "support_detail"}
 VERBOSE_COLUMNS = [
     f.name
