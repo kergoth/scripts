@@ -5,7 +5,6 @@
 # dependencies = ["httpx", "rich"]
 # ///
 #
-# TODO: Validate links. If 404, don't include them in output
 # TODO: Consider alternative release notes links. Older releases in particular
 #       don't have "RELEASENOTES", but other candidates like "RELEASENOTES.txt"
 #       and README
@@ -28,6 +27,8 @@ import sys
 import dataclasses
 from dataclasses import dataclass
 from datetime import datetime
+import asyncio
+
 
 import httpx
 from rich.console import Console
@@ -36,8 +37,12 @@ from rich.text import Text
 
 WIKI_RAW_URL = "https://wiki.yoctoproject.org/wiki/index.php?title=Releases&action=raw"
 DOWNLOADS_URL_FMT = "https://downloads.yoctoproject.org/releases/yocto/yocto-{version}/"
-RELEASE_NOTES_URL_FMT = "https://downloads.yoctoproject.org/releases/yocto/yocto-{version}/RELEASENOTES"
-MIGRATION_GUIDE_URL_FMT = "https://docs.yoctoproject.org/dev/migration-guides/migration-{series}.html"
+RELEASE_NOTES_URL_FMT = (
+    "https://downloads.yoctoproject.org/releases/yocto/yocto-{version}/RELEASENOTES"
+)
+MIGRATION_GUIDE_URL_FMT = (
+    "https://docs.yoctoproject.org/dev/migration-guides/migration-{series}.html"
+)
 
 MONTHS = {
     "jan": "01",
@@ -97,7 +102,7 @@ DEFAULT_COLUMNS = [
     "bitbake_branch",
     "current_version",
     "release_date",
-    "eol_date"
+    "eol_date",
 ]
 
 # Support detail, while useful as a pristine version of the source data, provides
@@ -105,7 +110,9 @@ DEFAULT_COLUMNS = [
 # increasing the column count beyond a reasonable limit.
 VERBOSE_EXCLUDED_COLUMNS = {"maintainer", "support_detail"}
 VERBOSE_COLUMNS = [
-    f.name for f in dataclasses.fields(YoctoRelease) if f.name not in VERBOSE_EXCLUDED_COLUMNS
+    f.name
+    for f in dataclasses.fields(YoctoRelease)
+    if f.name not in VERBOSE_EXCLUDED_COLUMNS
 ]
 
 COLUMN_HEADERS = {
@@ -123,6 +130,7 @@ COLUMN_HEADERS = {
     "release_notes_url": "Release Notes",
     "migration_guide_url": "Migration Guide",
 }
+
 
 @dataclass
 class WikiRow:
@@ -352,7 +360,9 @@ def parse_release_table(wikitext: str) -> list[YoctoRelease]:
         bitbake_branch = clean_cell(row.bitbake)
         maintainer = clean_maintainer(row.maintainer)
         eol_date = compute_eol_date(release_date, support_status, support_detail)
-        downloads_url, release_notes_url, migration_guide_url = make_urls(current_version)
+        downloads_url, release_notes_url, migration_guide_url = make_urls(
+            current_version or version
+        )
 
         releases.append(
             YoctoRelease(
@@ -368,7 +378,7 @@ def parse_release_table(wikitext: str) -> list[YoctoRelease]:
                 maintainer=maintainer,
                 downloads_url=downloads_url,
                 release_notes_url=release_notes_url,
-                migration_guide_url=migration_guide_url
+                migration_guide_url=migration_guide_url,
             )
         )
 
@@ -396,8 +406,12 @@ def format_rich(
         data = dataclasses.asdict(release)
         if hyperlink:
             data["downloads_url"] = _linkify(data["downloads_url"], "Download")
-            data["release_notes_url"] = _linkify(data["release_notes_url"], "Release Notes")
-            data["migration_guide_url"] = _linkify(data["migration_guide_url"], "Migration Guide")
+            data["release_notes_url"] = _linkify(
+                data["release_notes_url"], "Release Notes"
+            )
+            data["migration_guide_url"] = _linkify(
+                data["migration_guide_url"], "Migration Guide"
+            )
         values = [data[col] for col in columns]
 
         style = None
@@ -410,7 +424,7 @@ def format_rich(
 
         table.add_row(*values, style=style)
 
-    Console().print(table)
+    return table
 
 
 def format_plain(releases: list[YoctoRelease], verbose: bool = False) -> str:
@@ -436,7 +450,7 @@ def format_plain(releases: list[YoctoRelease], verbose: bool = False) -> str:
     return "\n".join(lines)
 
 
-def format_csv(releases: list[YoctoRelease], delimiter: str = ',') -> str:
+def format_csv(releases: list[YoctoRelease], delimiter: str = ",") -> str:
     """Format releases as CSV with all fields."""
     output = io.StringIO()
     fieldnames = [f.name for f in dataclasses.fields(YoctoRelease)]
@@ -449,7 +463,7 @@ def format_csv(releases: list[YoctoRelease], delimiter: str = ',') -> str:
 
 def format_tsv(releases: list[YoctoRelease]) -> str:
     """Format releases as TSV with all fields."""
-    return format_csv(releases, delimiter='\t')
+    return format_csv(releases, delimiter="\t")
 
 
 def format_json(releases: list[YoctoRelease]) -> str:
@@ -534,60 +548,159 @@ def infer_future_lts(releases: list[YoctoRelease]) -> list[YoctoRelease]:
     return releases
 
 
+async def _check_url(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    timeout_s: float,
+) -> bool:
+    """
+    Return True if URL is considered valid.
+
+    Policy:
+      - Follow redirects.
+      - Only treat 404 as invalid (per request).
+      - Be conservative on network errors/timeouts: treat as valid (avoid false negatives).
+      - Use HEAD first; fall back to GET if HEAD is not usable.
+    """
+    if not url:
+        return False
+
+    try:
+        r = await client.head(url, timeout=timeout_s)
+        if r.status_code in (403, 405):
+            r = await client.get(url, timeout=timeout_s)
+
+        return r.status_code != 404
+    except (httpx.TimeoutException, httpx.TransportError):
+        return True
+
+
+async def _validate_urls_async(
+    releases: list[YoctoRelease],
+    *,
+    max_concurrency: int,
+    timeout_s: float,
+) -> list[YoctoRelease]:
+    sem = asyncio.Semaphore(max_concurrency)
+
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+
+        async def guarded_check(url: str) -> bool:
+            async with sem:
+                return await _check_url(client, url, timeout_s=timeout_s)
+
+        # Flatten tasks as (release_index, field_name, url)
+        work: list[tuple[int, str, str]] = []
+        for i, r in enumerate(releases):
+            if r.downloads_url:
+                work.append((i, "downloads_url", r.downloads_url))
+            if r.release_notes_url:
+                work.append((i, "release_notes_url", r.release_notes_url))
+            if r.migration_guide_url:
+                work.append((i, "migration_guide_url", r.migration_guide_url))
+
+        if not work:
+            return releases
+
+        results = await asyncio.gather(*(guarded_check(url) for _, _, url in work))
+
+    updated = list(releases)
+    for (i, field, url), ok in zip(work, results, strict=True):
+        if not ok:
+            updated[i] = dataclasses.replace(updated[i], **{field: ""})
+
+    return updated
+
+
+def validate_urls(
+    releases: list[YoctoRelease],
+    *,
+    max_concurrency: int = 32,
+    timeout_s: float = 10.0,
+) -> list[YoctoRelease]:
+    """
+    Validate per-release URLs in parallel and blank out only those that 404.
+
+    Returns a new releases list with updated dataclasses.
+    """
+    return asyncio.run(
+        _validate_urls_async(
+            releases,
+            max_concurrency=max_concurrency,
+            timeout_s=timeout_s,
+        )
+    )
+
+
 def main() -> int:
     """Entry point."""
     args = parse_args()
+    console = Console()
 
     try:
         wikitext = fetch_wiki_text()
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        print(f"Error fetching wiki data: {exc}", file=sys.stderr)
+        console.print(f"Error fetching wiki data: {exc}", file=sys.stderr)
         return 1
 
     try:
         releases = parse_release_table(wikitext)
     except ValueError as exc:
-        print(f"Error parsing release table: {exc}", file=sys.stderr)
+        console.print(f"Error parsing release table: {exc}", file=sys.stderr)
         return 1
 
     releases = infer_future_lts(releases)
 
     if args.lts_only:
-        releases = [r for r in releases if r.support_status in ("Future (LTS)", "LTS", "EOL (LTS)")]
+        releases = [
+            r
+            for r in releases
+            if r.support_status in ("Future (LTS)", "LTS", "EOL (LTS)")
+        ]
     elif args.supported_only:
         releases = [r for r in releases if not r.support_status.startswith("EOL")]
 
     if args.version:
         releases = [r for r in releases if r.version == args.version]
         if not releases:
-            print(f"No release found with version {args.version}", file=sys.stderr)
+            console.print(
+                f"No release found with version {args.version}", file=sys.stderr
+            )
             return 1
 
     if args.codename:
         target = args.codename.lower()
         releases = [r for r in releases if r.codename == target]
         if not releases:
-            print(f"No release found with codename {target}", file=sys.stderr)
+            console.print(f"No release found with codename {target}", file=sys.stderr)
             return 1
 
     if not releases:
-        print(f"No releases found. This is most likely a bug in the script.", file=sys.stderr)
+        console.print(
+            "No releases found. This is most likely a bug in the script.",
+            file=sys.stderr,
+        )
         return 1
+
+    releases = validate_urls(releases)
 
     fmt = args.format
     if fmt is None:
         fmt = "rich" if sys.stdout.isatty() else "plain"
 
     if fmt == "rich":
-        Console().print(format_rich(releases, verbose=args.verbose, hyperlink=args.hyperlink))
+        console.print(
+            format_rich(releases, verbose=args.verbose, hyperlink=args.hyperlink)
+        )
     elif fmt == "plain":
-        print(format_plain(releases, verbose=args.verbose))
+        console.print(format_plain(releases, verbose=args.verbose))
     elif fmt == "csv":
-        print(format_csv(releases))
+        console.print(format_csv(releases))
     elif fmt == "tsv":
-        print(format_tsv(releases))
+        console.print(format_tsv(releases))
     elif fmt == "json":
-        print(format_json(releases))
+        console.print(format_json(releases))
 
     return 0
 
