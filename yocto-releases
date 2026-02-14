@@ -1,0 +1,541 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["httpx", "rich"]
+# ///
+#
+# TODO: Refactor to move inferred Future LTS out of main()
+# TODO: Validate links. If 404, don't include them in output
+# TODO: Consider alternative release notes links. Older releases in particular
+#       don't have "RELEASENOTES", but other candidates like "RELEASENOTES.txt"
+#       and README
+# TODO: Fetch per-release details from RELEASENOTES (commit hashes, layer info)
+# TODO: Show individual point releases within a series (optionally nested in JSON)
+
+"""Fetch and display Yocto Project release series information.
+
+Data source: Yocto Project wiki release table (MediaWiki raw wikitext).
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import io
+import json
+import re
+import sys
+from dataclasses import asdict, dataclass, fields
+from datetime import datetime, timedelta
+
+import httpx
+import rich
+from rich.console import Console
+from rich.table import Table
+
+WIKI_RAW_URL = "https://wiki.yoctoproject.org/wiki/index.php?title=Releases&action=raw"
+DOWNLOADS_BASE = "https://downloads.yoctoproject.org/releases/yocto"
+MIGRATION_FMT = "https://docs.yoctoproject.org/dev/migration-guides/migration-{version}.html"
+
+MONTHS = {
+    "jan": "01",
+    "january": "01",
+    "feb": "02",
+    "february": "02",
+    "mar": "03",
+    "march": "03",
+    "apr": "04",
+    "april": "04",
+    "may": "05",
+    "jun": "06",
+    "june": "06",
+    "jul": "07",
+    "july": "07",
+    "aug": "08",
+    "august": "08",
+    "sep": "09",
+    "september": "09",
+    "oct": "10",
+    "october": "10",
+    "nov": "11",
+    "november": "11",
+    "dec": "12",
+    "december": "12",
+}
+
+# Used to strip out unicode superscripts (i.e. ¹, ², ³, etc.)
+SUPERSCRIPTS = str.maketrans(
+    "", "", "\u00b9\u00b2\u00b3\u2070\u2074\u2075\u2076\u2077\u2078\u2079"
+)
+
+
+@dataclass
+class YoctoRelease:
+    """A Yocto Project release series."""
+
+    version: str
+    codename: str
+    release_date: str
+    current_version: str
+    current_version_date: str
+    support_status: str
+    support_detail: str
+    eol_date: str
+    bitbake_branch: str
+    maintainer: str
+    downloads_url: str
+    release_notes_url: str
+    migration_guide_url: str
+
+
+DEFAULT_COLUMNS = [
+    "version",
+    "codename",
+    "support_status",
+    "bitbake_branch",
+    "current_version",
+    "release_date",
+    "eol_date"
+]
+
+# Support detail, while useful as a pristine version of the source data, provides
+# little beyond the support status and EOL date. Maintainer, while useful, is
+# increasing the column count beyond a reasonable limit.
+VERBOSE_EXCLUDED_COLUMNS = ["maintainer", "support_detail"]
+VERBOSE_COLUMNS = [
+    f.name for f in fields(YoctoRelease) if f.name not in VERBOSE_EXCLUDED_COLUMNS
+]
+
+COLUMN_HEADERS = {
+    "version": "Version",
+    "codename": "Codename",
+    "release_date": "Released",
+    "current_version": "Current",
+    "current_version_date": "Updated",
+    "support_status": "Status",
+    "support_detail": "Support Detail",
+    "eol_date": "EOL Date",
+    "bitbake_branch": "BitBake",
+    "maintainer": "Maintainer",
+    "downloads_url": "Downloads",
+    "release_notes_url": "Release Notes",
+    "migration_guide_url": "Migration Guide",
+}
+
+def fetch_wiki_text() -> str:
+    """Fetch raw wikitext from the Yocto Project Releases wiki page."""
+    response = httpx.get(WIKI_RAW_URL, timeout=30, follow_redirects=True)
+    response.raise_for_status()
+    return response.text
+
+
+def extract_first_table(wikitext: str) -> str:
+    """Extract the first wiki table from the wikitext."""
+    start = wikitext.find("{|")
+    if start == -1:
+        raise ValueError("No wiki table found in page content")
+    end = wikitext.find("|}", start)
+    if end == -1:
+        raise ValueError("Unterminated wiki table")
+    return wikitext[start : end + 2]
+
+
+def split_table_rows(table_text: str) -> list[list[str]]:
+    """Split a wiki table into rows of cell values."""
+    lines = table_text.split("\n")
+    rows: list[list[str]] = []
+    current_row: list[str] = []
+    in_header = True
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("|-") or stripped == "|}":
+            if current_row and not in_header:
+                rows.append(current_row)
+            current_row = []
+            in_header = False
+        elif stripped.startswith("!"):
+            continue
+        elif stripped.startswith("|") and not stripped.startswith("{|"):
+            current_row.append(stripped[1:].strip())
+
+    if current_row:
+        rows.append(current_row)
+
+    return rows
+
+
+def clean_cell(text: str) -> str:
+    """Strip HTML tags, wiki links, and footnote markers from a cell value."""
+    text = text.translate(SUPERSCRIPTS)
+    text = re.sub(r"<br\s*/?>.*", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\[\[[^|\]]*\|([^\]]+)\]\]", r"\1", text)
+    text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
+    text = re.sub(r"\[https?://\S+\s+([^\]]+)\]", r"\1", text)
+    text = re.sub(r"\[https?://\S+\]", "", text)
+    text = re.sub(r"'''(.+?)'''", r"\1", text)
+    text = re.sub(r"''(.+?)''", r"\1", text)
+    return text.strip()
+
+
+def parse_codename(raw: str) -> str:
+    """Extract the codename as first word, lowercased."""
+    cleaned = clean_cell(raw)
+    return cleaned.split()[0].lower() if cleaned else ""
+
+
+def normalize_date(raw: str) -> str:
+    """Normalize date strings like 'April 2024', 'Apr 2013', '11 June 2010' to YYYY-MM."""
+    text = raw.strip().rstrip(".")
+    text = text.translate(SUPERSCRIPTS)
+    if not text:
+        return ""
+
+    parts = text.split()
+    if len(parts) == 2:
+        month_str, year = parts
+    elif len(parts) == 3:
+        _, month_str, year = parts
+    else:
+        month_str, year = None, None
+
+    if month_str and year.isdigit():
+        month = MONTHS.get(month_str.rstrip(".").lower(), "")
+        if month:
+            return f"{year}-{month}"
+
+    return raw.strip()
+
+
+def parse_current_version(raw: str) -> tuple[str, str]:
+    """Parse '5.0.15 (January 2026)' into (version, normalized_date)."""
+    cleaned = clean_cell(raw)
+    if not cleaned:
+        return "", ""
+
+    match = re.match(r"([\d.]+)\s*\((.+?)\)", cleaned)
+    if match:
+        return match.group(1), normalize_date(match.group(2))
+
+    if re.match(r"[\d.]+$", cleaned):
+        return cleaned, ""
+
+    return cleaned, ""
+
+
+def normalize_support_status(raw: str) -> tuple[str, str]:
+    """Return (normalized_status, original_detail) from support level text."""
+    cleaned = clean_cell(raw)
+    lower = cleaned.lower()
+
+    if lower == "future":
+        return "Future", cleaned
+    if "long term support" in lower or (lower.startswith("support") and "lts" in lower):
+        return "LTS", cleaned
+    if lower.startswith("eol") and "lts" in lower:
+        return "EOL (LTS)", cleaned
+    if lower.startswith("eol"):
+        return "EOL", cleaned
+    if lower.startswith("support"):
+        return "Supported", cleaned
+
+    if not cleaned:
+        return "EOL", ""
+    return cleaned, cleaned
+
+
+def compute_eol_date(
+    release_date: str, support_status: str, support_detail: str
+) -> str:
+    """Compute the EOL date from the release date and support period."""
+    until_match = re.search(r"until\s+(.+?)\)", support_detail, re.IGNORECASE)
+    if until_match:
+        return normalize_date(until_match.group(1))
+
+    since_match = re.search(r"EOL\s+since\s+(.+)", support_detail, re.IGNORECASE)
+    if since_match:
+        return normalize_date(since_match.group(1))
+
+    if not release_date or release_date == "" or "-" not in release_date:
+        return ""
+
+    parts = release_date.split("-")
+    if len(parts) < 2:
+        return ""
+
+    year, month = int(parts[0]), int(parts[1])
+
+    if support_status in ("LTS", "EOL (LTS)"):
+        return f"{year + 4}-{month:02d}"
+    elif support_status in ("Supported", "EOL"):
+        month += 6
+        if month > 12:
+            month -= 12
+            year += 1
+        return f"{year}-{month:02d}"
+
+    return ""
+
+
+def parse_date(date_str: str) -> datetime.date:
+    """Parse a date string into a datetime.date object."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m").date()
+    except ValueError:
+        return None
+
+
+def clean_maintainer(raw: str) -> str:
+    """Strip email addresses, keep just the name."""
+    cleaned = clean_cell(raw)
+    cleaned = re.sub(r"\s*<[^>]+>", "", cleaned)
+    cleaned = re.sub(r"\s*\([^)]*@[^)]*\)", "", cleaned)
+    return cleaned.strip()
+
+
+def make_urls(current_version: str) -> tuple[str, str]:
+    """Construct downloads and release notes URLs from the current version."""
+    if not current_version:
+        return "", "", ""
+    series_version = ".".join(current_version.split(".")[:2])
+    return (
+        f"{DOWNLOADS_BASE}/yocto-{current_version}/",
+        f"{DOWNLOADS_BASE}/yocto-{current_version}/RELEASENOTES",
+        str.format(MIGRATION_FMT, version=series_version)
+    )
+
+
+def parse_release_table(wikitext: str) -> list[YoctoRelease]:
+    """Parse the wiki release table into a list of YoctoRelease objects."""
+    table_text = extract_first_table(wikitext)
+    rows = split_table_rows(table_text)
+    releases: list[YoctoRelease] = []
+
+    for row in rows:
+        while len(row) < 9:
+            row.append("")
+
+        codename = parse_codename(row[0])
+        if not codename:
+            continue
+
+        version = clean_cell(row[1])
+        if not version:
+            continue
+
+        release_date = normalize_date(clean_cell(row[2]))
+        current_version, current_version_date = parse_current_version(row[3])
+        support_status, support_detail = normalize_support_status(row[4])
+        bitbake_branch = clean_cell(row[6])
+        maintainer = clean_maintainer(row[7])
+        eol_date = compute_eol_date(release_date, support_status, support_detail)
+        downloads_url, release_notes_url, migration_guide_url = make_urls(current_version)
+
+        releases.append(
+            YoctoRelease(
+                version=version,
+                codename=codename,
+                release_date=release_date,
+                current_version=current_version,
+                current_version_date=current_version_date,
+                support_status=support_status,
+                support_detail=support_detail,
+                eol_date=eol_date,
+                bitbake_branch=bitbake_branch,
+                maintainer=maintainer,
+                downloads_url=downloads_url,
+                release_notes_url=release_notes_url,
+                migration_guide_url=migration_guide_url
+            )
+        )
+
+    return releases
+
+
+def format_rich(
+    releases: list[YoctoRelease], verbose: bool = False, hyperlink: bool = False
+) -> None:
+    """Print a styled table to the terminal using rich."""
+    columns = VERBOSE_COLUMNS if verbose else DEFAULT_COLUMNS
+    table = Table(show_header=True, header_style="bold", show_lines=False)
+
+    for col in columns:
+        table.add_column(COLUMN_HEADERS.get(col, col))
+
+    for release in releases:
+        data = asdict(release)
+        if hyperlink:
+            data["downloads_url"] = f"[link={data['downloads_url']}]Download[/link]"
+            data["release_notes_url"] = (
+                f"[link={data['release_notes_url']}]Release Notes[/link]"
+            )
+            data["migration_guide_url"] = (
+                f"[link={data['migration_guide_url']}]Migration Guide[/link]"
+            )
+        values = [data[col] for col in columns]
+
+        style = None
+        if release.support_status.startswith("EOL"):
+            style = "dim"
+        elif release.support_status == "LTS":
+            style = "green"
+        elif release.support_status == "Supported":
+            style = "cyan"
+
+        table.add_row(*values, style=style)
+
+    console = Console()
+    console.print(table)
+
+
+def format_plain(releases: list[YoctoRelease], verbose: bool = False) -> str:
+    """Format releases as an aligned plain text table."""
+    columns = VERBOSE_COLUMNS if verbose else DEFAULT_COLUMNS
+    headers = [COLUMN_HEADERS.get(col, col) for col in columns]
+
+    rows = []
+    for release in releases:
+        data = asdict(release)
+        rows.append([data[col] for col in columns])
+
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, val in enumerate(row):
+            widths[i] = max(widths[i], len(val))
+
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    lines = [fmt.format(*headers), fmt.format(*("-" * w for w in widths))]
+    for row in rows:
+        lines.append(fmt.format(*row))
+
+    return "\n".join(lines)
+
+
+def format_csv(releases: list[YoctoRelease]) -> str:
+    """Format releases as CSV with all fields."""
+    output = io.StringIO()
+    fieldnames = [f.name for f in fields(YoctoRelease)]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for release in releases:
+        writer.writerow(asdict(release))
+    return output.getvalue().rstrip("\n")
+
+
+def format_json(releases: list[YoctoRelease]) -> str:
+    """Format releases as JSON with all fields."""
+    return json.dumps([asdict(r) for r in releases], indent=2)
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description=__doc__.strip(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "-s",
+        "--supported-only",
+        action="store_true",
+        help="exclude EOL releases",
+    )
+    parser.add_argument(
+        "-l",
+        "--lts-only",
+        action="store_true",
+        help="only show LTS releases (includes EOL LTS)",
+    )
+    parser.add_argument(
+        "--version",
+        metavar="VERSION",
+        help="filter to a specific version (e.g. '5.0')",
+    )
+    parser.add_argument(
+        "--codename",
+        metavar="NAME",
+        help="filter to a specific codename (e.g. 'scarthgap')",
+    )
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=["rich", "plain", "csv", "json"],
+        default=None,
+        help="output format (default: rich if TTY, plain otherwise)",
+    )
+    parser.add_argument(
+        "--no-hyperlink",
+        dest="hyperlink",
+        action="store_false",
+        help="disable hyperlinks in rich output",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="show all fields in table output",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Entry point."""
+    args = parse_args()
+
+    try:
+        wikitext = fetch_wiki_text()
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        print(f"Error fetching wiki data: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        releases = parse_release_table(wikitext)
+    except ValueError as exc:
+        print(f"Error parsing release table: {exc}", file=sys.stderr)
+        return 1
+
+    if len(releases) > 0 and releases[0].support_status == "Future":
+        # If the upcoming release is exactly 2 years from the latest LTS release, then we know the future
+        # release is a future LTS, and should tag it as such in its support status.
+        future = releases[0]
+        lts_releases = [r for r in releases if r.support_status == "LTS"]
+        if lts_releases:
+            latest_lts = lts_releases[0]
+            lts_date = parse_date(latest_lts.release_date)
+            future_date = parse_date(future.release_date)
+            if lts_date.month == future_date.month and future_date.year == (lts_date.year + 2):
+                future.support_status = "Future (LTS)"
+                future.eol_date = (future_date + timedelta(weeks=104)).strftime("%Y-%m")
+                future.support_detail = f"Future (LTS) (Until {future.eol_date})"
+
+    if args.lts_only:
+        releases = [r for r in releases if r.support_status in ("Future (LTS)", "LTS", "EOL (LTS)")]
+    elif args.supported_only:
+        releases = [r for r in releases if not r.support_status.startswith("EOL")]
+
+    if args.version:
+        releases = [r for r in releases if r.version == args.version]
+
+    if args.codename:
+        target = args.codename.lower()
+        releases = [r for r in releases if r.codename == target]
+
+    fmt = args.format
+    if fmt is None:
+        fmt = "rich" if sys.stdout.isatty() else "plain"
+
+    if fmt == "rich":
+        format_rich(releases, verbose=args.verbose, hyperlink=args.hyperlink)
+    elif fmt == "plain":
+        print(format_plain(releases, verbose=args.verbose))
+    elif fmt == "csv":
+        print(format_csv(releases))
+    elif fmt == "json":
+        rich.print_json(format_json(releases))
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
