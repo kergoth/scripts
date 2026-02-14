@@ -559,10 +559,20 @@ def main() -> int:
 
     if args.version:
         releases = [r for r in releases if r.version == args.version]
+        if not releases:
+            print(f"No release found with version {args.version}", file=sys.stderr)
+            return 1
 
     if args.codename:
         target = args.codename.lower()
         releases = [r for r in releases if r.codename == target]
+        if not releases:
+            print(f"No release found with codename {target}", file=sys.stderr)
+            return 1
+
+    if not releases:
+        print(f"No releases found. This is most likely a bug in the script.", file=sys.stderr)
+        return 1
 
     fmt = args.format
     if fmt is None:
