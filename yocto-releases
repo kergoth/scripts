@@ -10,6 +10,12 @@
 #       and README
 # TODO: Fetch per-release details from RELEASENOTES (commit hashes, layer info)
 # TODO: Show individual point releases within a series (optionally nested in JSON)
+# TODO: Consider refactoring the list of releases into some sort of Table object
+#       holding both the rows and column headers. The pattern of "get a table from
+#       somewhere and then print it in various tabular formats" is more generic than
+#       the current implementation, which is specific to the release table.
+#       We could potentially also create a standalone formatted csv output tool in
+#       the same style as this script.
 
 """Fetch and display Yocto Project release series information.
 
