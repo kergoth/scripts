@@ -413,15 +413,20 @@ def format_plain(releases: list[YoctoRelease], verbose: bool = False) -> str:
     return "\n".join(lines)
 
 
-def format_csv(releases: list[YoctoRelease]) -> str:
+def format_csv(releases: list[YoctoRelease], delimiter: str = ',') -> str:
     """Format releases as CSV with all fields."""
     output = io.StringIO()
     fieldnames = [f.name for f in fields(YoctoRelease)]
-    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer = csv.DictWriter(output, fieldnames=fieldnames, delimiter=delimiter)
     writer.writeheader()
     for release in releases:
         writer.writerow(asdict(release))
     return output.getvalue().rstrip("\n")
+
+
+def format_tsv(releases: list[YoctoRelease]) -> str:
+    """Format releases as TSV with all fields."""
+    return format_csv(releases, delimiter='\t')
 
 
 def format_json(releases: list[YoctoRelease]) -> str:
@@ -460,7 +465,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-f",
         "--format",
-        choices=["rich", "plain", "csv", "json"],
+        choices=["rich", "plain", "csv", "tsv", "json"],
         default=None,
         help="output format (default: rich if TTY, plain otherwise)",
     )
@@ -531,6 +536,8 @@ def main() -> int:
         print(format_plain(releases, verbose=args.verbose))
     elif fmt == "csv":
         print(format_csv(releases))
+    elif fmt == "tsv":
+        print(format_tsv(releases))
     elif fmt == "json":
         rich.print_json(format_json(releases))
 
