@@ -25,16 +25,15 @@ Data source: Yocto Project wiki release table (MediaWiki raw wikitext).
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
+import dataclasses
 import io
 import json
 import re
 import sys
-import dataclasses
 from dataclasses import dataclass
 from datetime import datetime
-import asyncio
-
 
 import httpx
 from rich.console import Console
