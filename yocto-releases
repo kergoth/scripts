@@ -30,6 +30,7 @@ import csv
 import dataclasses
 import io
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -47,6 +48,10 @@ RELEASE_NOTES_URL_FMT = (
 )
 MIGRATION_GUIDE_URL_FMT = (
     "https://docs.yoctoproject.org/dev/migration-guides/migration-{series}.html"
+)
+GITHUB_OE_CORE_URL = (
+    "https://api.github.com/repos/openembedded/openembedded-core"
+    "/contents/meta/recipes-kernel/linux"
 )
 
 MONTHS = {
@@ -98,6 +103,7 @@ class YoctoRelease:
     downloads_url: str
     release_notes_url: str
     migration_guide_url: str
+    kernel_version: str = ""
 
 
 DEFAULT_COLUMNS = [
@@ -114,7 +120,7 @@ DEFAULT_COLUMNS = [
 # source data, provides little beyond the support status and EOL date.
 # 'Maintainer', while useful, is increasing the column count beyond a
 # reasonable limit.
-VERBOSE_EXCLUDED_COLUMNS = {"maintainer", "support_detail"}
+VERBOSE_EXCLUDED_COLUMNS = {"maintainer", "support_detail", "kernel_version"}
 VERBOSE_COLUMNS = [
     f.name
     for f in dataclasses.fields(YoctoRelease)
@@ -135,6 +141,7 @@ COLUMN_HEADERS = {
     "downloads_url": "Downloads",
     "release_notes_url": "Release Notes",
     "migration_guide_url": "Migration Guide",
+    "kernel_version": "Kernel",
 }
 
 
@@ -399,10 +406,12 @@ def _linkify(url: str, label: str) -> Text | str:
 
 
 def format_rich(
-    releases: list[YoctoRelease], verbose: bool = False, hyperlink: bool = False
+    releases: list[YoctoRelease],
+    columns: list[str],
+    *,
+    hyperlink: bool = False,
 ) -> Table:
     """Return a styled rich table to the terminal using rich."""
-    columns = VERBOSE_COLUMNS if verbose else DEFAULT_COLUMNS
     table = Table(show_header=True, header_style="bold", show_lines=False)
 
     for col in columns:
@@ -433,9 +442,8 @@ def format_rich(
     return table
 
 
-def format_plain(releases: list[YoctoRelease], verbose: bool = False) -> str:
+def format_plain(releases: list[YoctoRelease], columns: list[str]) -> str:
     """Format releases as an aligned plain text table."""
-    columns = VERBOSE_COLUMNS if verbose else DEFAULT_COLUMNS
     headers = [COLUMN_HEADERS.get(col, col) for col in columns]
 
     rows = []
@@ -523,6 +531,12 @@ def parse_args() -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="show all fields in table output",
+    )
+    parser.add_argument(
+        "-k",
+        "--kernel",
+        action="store_true",
+        help="fetch and show default linux-yocto kernel version (requires GitHub API)",
     )
     return parser.parse_args()
 
@@ -639,6 +653,85 @@ def validate_urls(
     )
 
 
+async def _fetch_kernel_version(
+    client: httpx.AsyncClient,
+    codename: str,
+    support_status: str,
+    *,
+    timeout_s: float,
+) -> str:
+    """Fetch linux-yocto major.minor version for a codename from OE-Core."""
+    branches_to_try = [codename]
+    if "Future" in support_status:
+        branches_to_try.append("master")
+
+    for ref in branches_to_try:
+        try:
+            r = await client.get(
+                GITHUB_OE_CORE_URL,
+                params={"ref": ref},
+                timeout=timeout_s,
+            )
+            if r.status_code == 404:
+                continue
+            r.raise_for_status()
+            files = r.json()
+            for f in files:
+                m = re.match(r"linux-yocto_(\d+\.\d+)\.bb$", f["name"])
+                if m:
+                    return m.group(1)
+        except (httpx.TimeoutException, httpx.TransportError, ValueError):
+            pass
+    return ""
+
+
+async def _fetch_kernel_versions_async(
+    releases: list[YoctoRelease],
+    *,
+    max_concurrency: int,
+    timeout_s: float,
+) -> list[YoctoRelease]:
+    headers: dict[str, str] = {}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    sem = asyncio.Semaphore(max_concurrency)
+    async with httpx.AsyncClient(follow_redirects=True, headers=headers) as client:
+
+        async def guarded(release: YoctoRelease) -> str:
+            async with sem:
+                return await _fetch_kernel_version(
+                    client,
+                    release.codename,
+                    release.support_status,
+                    timeout_s=timeout_s,
+                )
+
+        versions = await asyncio.gather(*(guarded(r) for r in releases))
+
+    return [
+        dataclasses.replace(r, kernel_version=v)
+        for r, v in zip(releases, versions, strict=True)
+    ]
+
+
+def fetch_kernel_versions(
+    releases: list[YoctoRelease],
+    *,
+    max_concurrency: int = 8,
+    timeout_s: float = 10.0,
+) -> list[YoctoRelease]:
+    """Fetch linux-yocto kernel versions in parallel from OE-Core on GitHub."""
+    return asyncio.run(
+        _fetch_kernel_versions_async(
+            releases,
+            max_concurrency=max_concurrency,
+            timeout_s=timeout_s,
+        )
+    )
+
+
 def main() -> int:
     """Entry point."""
     args = parse_args()
@@ -689,16 +782,24 @@ def main() -> int:
 
     releases = validate_urls(releases)
 
+    if args.kernel:
+        releases = fetch_kernel_versions(releases)
+
+    columns = VERBOSE_COLUMNS if args.verbose else DEFAULT_COLUMNS
+    if args.kernel:
+        idx = columns.index("current_version") + 1
+        columns = columns[:idx] + ["kernel_version"] + columns[idx:]
+
     fmt = args.format
     if fmt is None:
         fmt = "rich" if sys.stdout.isatty() else "plain"
 
     if fmt == "rich":
         console.print(
-            format_rich(releases, verbose=args.verbose, hyperlink=args.hyperlink)
+            format_rich(releases, columns, hyperlink=args.hyperlink)
         )
     elif fmt == "plain":
-        console.print(format_plain(releases, verbose=args.verbose))
+        console.print(format_plain(releases, columns))
     elif fmt == "csv":
         console.print(format_csv(releases))
     elif fmt == "tsv":
