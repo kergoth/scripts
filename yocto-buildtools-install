@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# Usage: yocto-buildtools-install [options] -d <dir>
+#
+# Download and install the Yocto Project Buildtools (standalone nativesdk) into
+# the specified destination directory, using the attached `yocto-releases` script
+# to discover a release with downloadable artifacts.
+#
+# Selection behavior:
+# - Uses `yocto-releases -f json` and picks the first entry whose `downloads_url`
+#   is non-empty (skips future releases that don't publish downloads yet).
+#
+# Options:
+#     -d DIR        Install destination directory (required)
+#     -r VERSION    Yocto release series version (e.g. 5.3). Alternative to -c
+#     -c NAME       Yocto release codename (e.g. scarthgap). Alternative to -r
+#     -s            Only consider supported releases (passed to yocto-releases)
+#     -l            Only consider LTS releases (passed to yocto-releases)
+#     -y            Automatic yes to all prompts (passed to buildtools installer)
+#     -n            Dry run, print actions but do not execute
+#     -v            Increase verbosity (repeatable)
+#     -q            Decrease verbosity (repeatable)
+#     -h            Show this help message
+
+set -euo pipefail
+
+scriptname=${BASH_SOURCE[0]##*/}
+scriptdir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+PATH="$scriptdir:$PATH"
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    dest_dir=
+    series_version=
+    codename=
+    yocto_supported_only=0
+    yocto_lts_only=0
+    installer_yes=0
+    dry_run=0
+    verbosity=0
+
+    while getopts ":d:r:c:slynvqh" opt; do
+        case "$opt" in
+            d)
+                dest_dir=$OPTARG
+                ;;
+            r)
+                series_version=$OPTARG
+                ;;
+            c)
+                codename=$OPTARG
+                ;;
+            s)
+                yocto_supported_only=1
+                ;;
+            l)
+                yocto_lts_only=1
+                ;;
+            y)
+                installer_yes=1
+                ;;
+            n)
+                dry_run=1
+                ;;
+            v)
+                verbosity=$((verbosity + 1))
+                ;;
+            q)
+                verbosity=$((verbosity - 1))
+                ;;
+            h)
+                show_help
+                exit 0
+                ;;
+            \?)
+                echo "Unknown option: -$OPTARG" >&2
+                show_help >&2
+                exit 1
+                ;;
+            :)
+                echo "Option -$OPTARG requires an argument" >&2
+                show_help >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ -z "$dest_dir" ]; then
+        echo "Error: -d <dir> is required" >&2
+        show_help >&2
+        exit 1
+    fi
+
+    if [ -n "$series_version" ] && [ -n "$codename" ]; then
+        echo "Error: use only one of -r or -c" >&2
+        show_help >&2
+        exit 1
+    fi
+
+    if [ "$yocto_supported_only" -eq 1 ] && [ "$yocto_lts_only" -eq 1 ]; then
+        echo "Error: use only one of -s or -l" >&2
+        show_help >&2
+        exit 1
+    fi
+}
+
+msg() {
+    # shellcheck disable=SC2059
+    printf "$1\n" "${@:2}" >&2
+}
+
+die() {
+    msg "Error: %s" "$1"
+    exit 1
+}
+
+has() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+printcmd() {
+    local out=
+    local arg=
+
+    out=
+    for arg in "$@"; do
+        out+=$(printf "%q " "$arg")
+    done
+    printf "%s" "${out% }"
+}
+
+run() {
+    if [ "${dry_run:-0}" = "1" ] || [ "${verbosity:-0}" -gt 0 ]; then
+        printf '❯ %s\n' "$(printcmd "$@")" >&2
+    fi
+    if [ "${dry_run:-0}" != "1" ]; then
+        "$@" || return $?
+    fi
+}
+
+normalize_arch() {
+    local uarch=
+    uarch=$(uname -m)
+
+    case "$uarch" in
+        x86_64|aarch64)
+            printf "%s" "$uarch"
+            ;;
+        amd64)
+            printf "x86_64"
+            ;;
+        arm64)
+            printf "aarch64"
+            ;;
+        *)
+            die "Unsupported architecture from uname -m: $uarch"
+            ;;
+    esac
+}
+
+require_linux() {
+    local os=
+    os=$(uname -s)
+    if [ "$os" != "Linux" ]; then
+        die "This script currently supports Linux only (got uname -s: $os)"
+    fi
+}
+
+require_tools() {
+    has jq || die "jq is required"
+    has yocto-releases || die "yocto-releases is required"
+    if has curl; then
+        :
+    elif has wget; then
+        :
+    else
+        die "curl or wget is required"
+    fi
+}
+
+fetch_release_json() {
+    local args=()
+    args+=(--format json)
+
+    if [ "$yocto_supported_only" -eq 1 ]; then
+        args+=(--supported-only)
+    fi
+
+    if [ "$yocto_lts_only" -eq 1 ]; then
+        args+=(--lts-only)
+    fi
+
+    if [ -n "$series_version" ]; then
+        args+=(--version "$series_version")
+    fi
+
+    if [ -n "$codename" ]; then
+        args+=(--codename "$codename")
+    fi
+
+    yocto-releases "${args[@]}"
+}
+
+select_first_downloadable_release() {
+    local json=$1
+
+    printf "%s" "$json" | jq -er '
+        map(select(.downloads_url != null and .downloads_url != "")) | .[0]
+    '
+}
+
+build_buildtools_url() {
+    local release_obj=$1
+    local arch=$2
+
+    local downloads_url=
+    local current_version=
+
+    downloads_url=$(printf "%s" "$release_obj" | jq -er '.downloads_url')
+    current_version=$(printf "%s" "$release_obj" | jq -er '.current_version')
+
+    if [ -z "$downloads_url" ] || [ "$downloads_url" = "null" ]; then
+        die "Selected release has no downloads_url"
+    fi
+
+    if [ -z "$current_version" ] || [ "$current_version" = "null" ]; then
+        die "Selected release has no current_version; cannot derive buildtools installer name"
+    fi
+
+    printf "%sbuildtools/%s-buildtools-nativesdk-standalone-%s.sh" \
+        "$downloads_url" \
+        "$arch" \
+        "$current_version"
+}
+
+download_file() {
+    local url=$1
+    local out=$2
+    local part=${out}.part
+
+    run rm -f -- "$part"
+
+    if has curl; then
+        run curl -fL -o "$part" "$url"
+    else
+        run wget -O "$part" "$url"
+    fi
+
+    run mv -f -- "$part" "$out"
+}
+
+install_buildtools() {
+    local installer=$1
+    local args=()
+
+    if [ "${installer_yes:-0}" -eq 1 ]; then
+        args+=(-y)
+    fi
+    args+=(-d "$dest_dir")
+
+    run bash "$installer" "${args[@]}"
+}
+
+main() {
+    process_arguments "$@"
+
+    # require_linux
+    require_tools
+
+    tmpdir=$(mktemp -d -t "${scriptname}.XXXXXX")
+    trap 'rm -rf -- "$tmpdir"' EXIT INT TERM
+
+    local arch
+    local yocto_releases
+    local releases_json
+    local release_obj
+    local bt_url
+    local installer_path
+
+    arch=$(normalize_arch)
+    releases_json=$(fetch_release_json)
+    release_obj=$(select_first_downloadable_release "$releases_json")
+
+    bt_url=$(build_buildtools_url "$release_obj" "$arch")
+    msg "Buildtools URL: %s" "$bt_url"
+
+    installer_path="$tmpdir/buildtools-installer.sh"
+
+    msg "Downloading..."
+    download_file "$bt_url" "$installer_path"
+    run chmod +x "$installer_path"
+
+    run mkdir -p "$dest_dir"
+
+    msg "Installing to: %s" "$dest_dir"
+    install_buildtools "$installer_path"
+
+    msg "Done"
+}
+
+main "$@"
