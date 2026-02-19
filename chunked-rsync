@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# Other useful arguments, for reference:
+#
+# -H    hard links
+# -A    ACLs
+# -X    xattrs
+# -t    times
+# -o    owner
+# -g    group
+# --progress    per file progress
+# --info=progress2  overall transfer progress (rsync 3.1.0 or newer)
+
+default_rsync_args="-rlDh --partial --append-verify"
+
+usage () {
+    echo >&2 "Usage: ${0##*/} [new|continue TEMPDIR|short-circuit PREFIX] [RSYNC ARGS..]"
+    echo >&2
+    echo >&2 "Default rsync arguments: $default_rsync_args"
+    echo >&2
+    echo >&2 "Files/directories are processed by PREFIX: A-Z, a-z, 0-9, in that order."
+    echo >&2
+    echo >&2 "Examples:"
+    echo >&2
+    echo >&2 "    chunked-rsync new -az --info=progress2 /foo /bar/"
+    echo >&2 "    chunked-rsync continue TEMPDIR -az --info=progress2 /foo /bar"
+    echo >&2 "    chunked-rsync short-circuit T -az --info=progress2 /foo /bar"
+    exit 2
+}
+
+die () {
+    msg="$1"
+    shift
+
+    printf >&2 "$msg\n" "$@"
+    printf >&2 "Temp directory for continuation at $tempdir\n"
+    exit 1
+}
+
+if [ $# -lt 3 ]; then
+    usage
+fi
+
+mode="$1"
+case "$mode" in
+    new)
+        tempdir="$(mktemp -d "${0##*/}.XXX")"
+        touch "$tempdir"/completed
+        echo >&2 "Starting new sync using tempdir $tempdir"
+        ;;
+    continue)
+        shift || usage
+        tempdir="$1"
+        echo >&2 "Continuing existing sync at $tempdir"
+        ;;
+    short-circuit)
+        shift || usage
+        skip_prefix="$1"
+        tempdir="$(mktemp -d "${0##*/}.XXX")"
+        touch "$tempdir"/completed
+        echo >&2 "Starting new sync at prefix $skip_prefix using tempdir $tempdir"
+        ;;
+    *)
+        echo >&2 "Invalid mode '$mode'"
+        usage
+        exit 3
+        ;;
+esac
+shift || usage
+
+for prefix in {A..Z} {a..z} {0..9}; do
+    if [ "$mode" = "short-circuit" ]; then
+        if [ "$prefix" != "$skip_prefix" ]; then
+            echo >&2 "Skipping prefix $prefix"
+            echo "$prefix" >>"$tempdir"/completed
+            continue
+        else
+            mode=continue
+        fi
+    elif grep -qx "$prefix" "$tempdir"/completed; then
+        echo >&2 "Skipping already-completed prefix $prefix"
+        continue
+    fi
+
+    echo >&2 "Syncing prefix $prefix ({.,}$prefix*)"
+    rsync $default_rsync_args \
+        --filter "S /$prefix*" \
+        --filter "S /.$prefix*" \
+        --filter "R /$prefix*" \
+        --filter "R /.$prefix*" \
+        --filter 'H /*' --filter 'H /.*' \
+        --filter 'P /*' --filter 'P /.*' \
+        "$@" || die "Error encountered when syncing $prefix"
+    echo "$prefix" >>"$tempdir"/completed
+done
+rm -rf "$tempdir"
