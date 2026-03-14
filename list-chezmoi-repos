@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    echo "Usage: $(basename "$0") [limit]" >&2
+    echo "List repositories related to chezmoi dotfiles ordered by stars." >&2
+    echo "Default limit: 100" >&2
+}
+
+limit="${1:-100}"
+
+gh api \
+    -X GET search/repositories \
+    -f q="topic:dotfiles topic:chezmoi" \
+    -f sort=stars \
+    -f order=desc \
+    -f per_page="$limit" \
+    "$@" \
+    --jq '
+        .items[]
+        | [
+            (.stargazers_count|tostring),
+            .full_name,
+            .html_url,
+            (.description // "")
+          ]
+        | @tsv
+    ' |
+sort -nr |
+column -t -s $'\t'
