@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Usage: clp [options] [prompt]
+#
+# Wrapper around 'claude -p' that accepts input from stdin or as an argument,
+# and formats markdown output when running interactively.
+#
+# If prompt is provided as an argument, it is passed to claude -p.
+# If no argument is given, reads prompt from stdin.
+#
+# When stdout is a terminal and glow or bat is available, the markdown
+# output is piped through the formatter for better readability.
+#
+# Options:
+#     -h          Show this help message
+
+set -euo pipefail
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    while getopts "h" opt; do
+        case "$opt" in
+            h) show_help; exit 0 ;;
+            \?)
+                echo "Unknown option: -$OPTARG" >&2
+                show_help >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    if [ $# -gt 0 ]; then
+        prompt="$1"
+    else
+        prompt=
+    fi
+}
+
+main() {
+    local prompt
+    process_arguments "$@"
+
+    if [ -z "$prompt" ]; then
+        prompt=$(cat)
+    fi
+
+    local formatter=()
+    if [ -t 1 ]; then
+        if command -v glow >/dev/null 2>&1; then
+            formatter=(glow --pager)
+        elif command -v bat >/dev/null 2>&1; then
+            formatter=(bat --language=markdown --style=plain)
+        fi
+    fi
+
+    if [ ${#formatter[@]} -gt 0 ]; then
+        printf '%s' "$prompt" | claude -p | "${formatter[@]}"
+    else
+        printf '%s' "$prompt" | claude -p
+    fi
+}
+
+main "$@"
