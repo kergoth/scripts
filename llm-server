@@ -1,0 +1,555 @@
+#!/usr/bin/env bash
+# Usage: llm-server [-b swiftlm_bin] [-s state_dir] [options] command [model] [args]
+#
+# Manage multiple local SwiftLM-backed model servers for coding and research.
+#
+# Commands:
+#     list                    List configured model profiles
+#     start <model|all>       Start one model server or all
+#     stop <model|all>        Stop one model server or all
+#     restart <model|all>     Restart one model server or all
+#     status [model|all]      Show status for one model or all (default: all)
+#     is-running <model>      Exit 0 when model is running, 1 when not running
+#     logs <model> [lines]    Show log output for model (default: 40 lines)
+#     follow-logs <model>     Follow logs for model
+#     doctor                  Check binary availability and current runtime state
+#
+# Options:
+#     -b BINARY               SwiftLM binary/command (default: $LLM_SERVER_BIN or SwiftLM)
+#     -s DIR                  State directory (default: $LLM_SERVER_STATE_DIR or $XDG_STATE_HOME/llm-server)
+#     -n                      Dry run, don't actually do anything
+#     -v                      Increase verbosity, can be specified multiple times
+#     -q                      Decrease verbosity, can be specified multiple times
+#     -h                      Show this help message
+set -euo pipefail
+
+scriptname=${BASH_SOURCE[0]##*/}
+dry_run=0
+verbosity=0
+swiftlm_bin=${LLM_SERVER_BIN:-SwiftLM}
+state_dir=${LLM_SERVER_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/llm-server}
+
+model_id=
+model_port=
+model_extra_args=()
+
+command_name=
+command_model=
+command_arg=
+
+model_names=("quick" "coder" "reason" "reason-long")
+
+usage() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    while getopts ":b:s:nvqh" opt; do
+        case "$opt" in
+            b)
+                swiftlm_bin=$OPTARG
+                ;;
+            s)
+                state_dir=$OPTARG
+                ;;
+            n)
+                dry_run=1
+                ;;
+            v)
+                verbosity=$((verbosity + 1))
+                ;;
+            q)
+                verbosity=$((verbosity - 1))
+                ;;
+            h)
+                usage
+                exit 0
+                ;;
+            \?)
+                msg_red "Unknown option: -$OPTARG"
+                usage >&2
+                exit 1
+                ;;
+            :)
+                msg_red "Option -$OPTARG requires an argument"
+                usage >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    command_name=${1:-status}
+    command_model=${2:-all}
+    command_arg=${3:-}
+}
+
+msg() {
+    local fmt=$1
+    shift || true
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+msg_color() {
+    local color=$1
+    shift
+    local fmt=$1
+    shift || true
+    # shellcheck disable=SC2059
+    if [ -n "${NO_COLOR:-}" ] || { [ -z "${COLOR:-}" ] && ! [ -t 2 ]; }; then
+        printf -- "$fmt\n" "$@" >&2
+    else
+        printf -- "\033[%sm$fmt\033[0m\n" "$color" "$@" >&2
+    fi
+}
+
+msg_green() {
+    msg_color "32" "$@"
+}
+
+msg_red() {
+    msg_color "31" "$@"
+}
+
+msg_yellow() {
+    msg_color "33" "$@"
+}
+
+msg_verbose() {
+    if [ "$verbosity" -gt 0 ]; then
+        msg_yellow "$@"
+    fi
+}
+
+die() {
+    msg_red "$@"
+    exit 1
+}
+
+run() {
+    if [ "$verbosity" -gt 0 ] || [ "$dry_run" -eq 1 ]; then
+        msg "+ $*"
+    fi
+    if [ "$dry_run" -eq 1 ]; then
+        return 0
+    fi
+    "$@"
+}
+
+ensure_state_dir() {
+    run mkdir -p "$state_dir"
+}
+
+is_known_model() {
+    local name=$1
+    local model_name
+    for model_name in "${model_names[@]}"; do
+        if [ "$model_name" = "$name" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+model_config() {
+    local name=$1
+    model_extra_args=()
+    case "$name" in
+        quick)
+            model_id="mlx-community/Devstral-Small-2505-4bit"
+            model_port="5415"
+            model_extra_args=(--ctx-size 16384 --parallel 1)
+            ;;
+        coder)
+            model_id="mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
+            model_port="5414"
+            model_extra_args=(--ctx-size 32768 --parallel 1)
+            ;;
+        reason)
+            model_id="mlx-community/Qwen3.6-27B-4bit"
+            model_port="5413"
+            model_extra_args=(--thinking --ctx-size 32768 --parallel 1)
+            ;;
+        reason-long)
+            model_id="mlx-community/Qwen3.6-27B-4bit"
+            model_port="5416"
+            model_extra_args=(--thinking --ctx-size 65536 --parallel 1 --turbo-kv)
+            ;;
+        *)
+            die "Unknown model profile: $name"
+            ;;
+    esac
+}
+
+pid_file_for() {
+    local name=$1
+    printf "%s/%s.pid\n" "$state_dir" "$name"
+}
+
+log_file_for() {
+    local name=$1
+    printf "%s/%s.log\n" "$state_dir" "$name"
+}
+
+read_pid_for() {
+    local name=$1
+    local pid_file
+    pid_file=$(pid_file_for "$name")
+    if [ -f "$pid_file" ]; then
+        tr -d '[:space:]' <"$pid_file"
+    else
+        return 1
+    fi
+}
+
+pid_is_alive() {
+    local pid=${1:-}
+    [ -n "$pid" ] || return 1
+    lsof -p "$pid" >/dev/null 2>&1
+}
+
+listener_pid_for() {
+    local name=$1
+    model_config "$name"
+    lsof -nP -iTCP:"$model_port" -sTCP:LISTEN -t 2>/dev/null | head -n 1
+}
+
+sync_pid_file_from_listener() {
+    local name=$1
+    local pid_file
+    local tracked_pid
+    local listener_pid
+
+    pid_file=$(pid_file_for "$name")
+    tracked_pid=$(read_pid_for "$name" 2>/dev/null || true)
+    listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
+
+    if [ -z "$listener_pid" ]; then
+        if [ -n "$tracked_pid" ] && ! pid_is_alive "$tracked_pid"; then
+            msg_verbose "Removing stale pid file: %s" "$pid_file"
+            run rm -f "$pid_file"
+        fi
+        return 0
+    fi
+
+    if [ "$tracked_pid" != "$listener_pid" ]; then
+        msg_verbose "Updating pid file for %s: %s -> %s" "$name" "${tracked_pid:-none}" "$listener_pid"
+        run mkdir -p "$state_dir"
+        if [ "$dry_run" -eq 0 ]; then
+            printf "%s\n" "$listener_pid" >"$pid_file"
+        else
+            msg "+ printf '%s\\n' '%s' > %s" "$listener_pid" "$listener_pid" "$pid_file"
+        fi
+    fi
+}
+
+is_running_model() {
+    local name=$1
+    sync_pid_file_from_listener "$name"
+    local tracked_pid
+    local listener_pid
+    tracked_pid=$(read_pid_for "$name" 2>/dev/null || true)
+    listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
+    [ -n "$listener_pid" ] || pid_is_alive "$tracked_pid"
+}
+
+cleanup_stale_pid_for() {
+    local name=$1
+    sync_pid_file_from_listener "$name"
+}
+
+status_model() {
+    local name=$1
+    model_config "$name"
+    cleanup_stale_pid_for "$name"
+
+    local pid
+    local listener_pid
+    pid=$(read_pid_for "$name" 2>/dev/null || true)
+    listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
+
+    if [ -n "$listener_pid" ]; then
+        printf "%s running pid=%s port=%s model=%s\n" "$name" "$listener_pid" "$model_port" "$model_id"
+        return 0
+    fi
+
+    if pid_is_alive "$pid"; then
+        printf "%s initializing pid=%s port=%s model=%s\n" "$name" "$pid" "$model_port" "$model_id"
+        return 0
+    fi
+
+    printf "%s stopped port=%s model=%s\n" "$name" "$model_port" "$model_id"
+    return 1
+}
+
+start_model() {
+    local name=$1
+    model_config "$name"
+    ensure_state_dir
+    cleanup_stale_pid_for "$name"
+
+    if is_running_model "$name"; then
+        local pid
+        pid=$(read_pid_for "$name" 2>/dev/null || true)
+        if [ -n "$(listener_pid_for "$name" 2>/dev/null || true)" ]; then
+            msg_yellow "%s already running (pid: %s)" "$name" "${pid:-unknown}"
+        else
+            msg_yellow "%s already initializing (pid: %s)" "$name" "${pid:-unknown}"
+        fi
+        return 0
+    fi
+
+    command -v "$swiftlm_bin" >/dev/null 2>&1 || die "SwiftLM binary not found: $swiftlm_bin"
+
+    local log_file
+    local pid_file
+    log_file=$(log_file_for "$name")
+    pid_file=$(pid_file_for "$name")
+    run touch "$log_file"
+    if [ "$dry_run" -eq 0 ]; then
+        printf "\n[%s] Starting profile=%s model=%s port=%s\n" \
+            "$(date '+%Y-%m-%d %H:%M:%S')" "$name" "$model_id" "$model_port" >>"$log_file"
+    fi
+
+    local cmd=("$swiftlm_bin" "--model" "$model_id" "--port" "$model_port")
+    if [ "${#model_extra_args[@]}" -gt 0 ]; then
+        cmd+=("${model_extra_args[@]}")
+    fi
+
+    if [ "$verbosity" -gt 0 ]; then
+        msg "Starting profile=%s model=%s port=%s" "$name" "$model_id" "$model_port"
+    fi
+    if [ "$dry_run" -eq 1 ]; then
+        return 0
+    fi
+
+    nohup "${cmd[@]}" >>"$log_file" 2>&1 &
+    local pid=$!
+    printf "%s\n" "$pid" >"$pid_file"
+
+    sleep 1
+    if ! kill -0 "$pid" 2>/dev/null; then
+        run rm -f "$pid_file"
+        die "%s failed to start; check logs: %s" "$name" "$log_file"
+    fi
+
+    # Catch short-lived startup failures (e.g. download/DNS errors) before reporting success.
+    local i
+    for i in $(seq 1 5); do
+        sleep 1
+        if ! kill -0 "$pid" 2>/dev/null; then
+            run rm -f "$pid_file"
+            die "%s failed during startup; check logs: %s" "$name" "$log_file"
+        fi
+    done
+
+    if curl -fsS --max-time 2 "http://127.0.0.1:${model_port}/v1/models" >/dev/null 2>&1; then
+        msg_green "%s ready (pid: %s, port: %s)" "$name" "$pid" "$model_port"
+    else
+        msg_yellow "%s started but still initializing (pid: %s, port: %s)" "$name" "$pid" "$model_port"
+    fi
+}
+
+stop_model() {
+    local name=$1
+    model_config "$name"
+    cleanup_stale_pid_for "$name"
+
+    local pid
+    local listener_pid
+    pid=$(read_pid_for "$name" 2>/dev/null || true)
+    listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
+
+    if [ -z "$listener_pid" ] && ! pid_is_alive "$pid"; then
+        msg_yellow "%s is not running" "$name"
+        return 0
+    fi
+
+    local pid_file
+    if [ -z "$pid" ]; then
+        pid=$listener_pid
+    fi
+    pid_file=$(pid_file_for "$name")
+    msg_verbose "Stopping %s pid %s" "$name" "$pid"
+
+    if [ "$dry_run" -eq 1 ]; then
+        msg "+ kill %s" "$pid"
+        return 0
+    fi
+
+    kill "$pid" 2>/dev/null || true
+
+    local i
+    local listener_pid
+    for i in $(seq 1 40); do
+        listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
+        if [ -z "$listener_pid" ]; then
+            break
+        fi
+        sleep 0.25
+    done
+
+    listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
+    if [ -n "$listener_pid" ]; then
+        msg_yellow "%s still running; sending SIGKILL to %s" "$name" "$listener_pid"
+        kill -KILL "$listener_pid" 2>/dev/null || true
+        sleep 0.5
+    fi
+
+    listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
+    if [ -n "$listener_pid" ]; then
+        sync_pid_file_from_listener "$name"
+        die "Failed to stop %s; listener still present on port %s (pid: %s)" "$name" "$model_port" "$listener_pid"
+    fi
+
+    run rm -f "$pid_file"
+    msg_green "%s stopped" "$name"
+}
+
+for_each_target() {
+    local target=$1
+    local fn=$2
+
+    if [ "$target" = "all" ]; then
+        local model_name
+        for model_name in "${model_names[@]}"; do
+            "$fn" "$model_name"
+        done
+        return 0
+    fi
+
+    is_known_model "$target" || die "Unknown model profile: $target"
+    "$fn" "$target"
+}
+
+cmd_list() {
+    local model_name
+    for model_name in "${model_names[@]}"; do
+        model_config "$model_name"
+        printf "%s port=%s model=%s\n" "$model_name" "$model_port" "$model_id"
+    done
+}
+
+cmd_start() {
+    for_each_target "$command_model" start_model
+}
+
+cmd_stop() {
+    for_each_target "$command_model" stop_model
+}
+
+cmd_restart() {
+    for_each_target "$command_model" stop_model
+    for_each_target "$command_model" start_model
+}
+
+cmd_status() {
+    local target=${command_model:-all}
+    local any_failed=0
+
+    if [ "$target" = "all" ]; then
+        local model_name
+        for model_name in "${model_names[@]}"; do
+            if ! status_model "$model_name"; then
+                any_failed=1
+            fi
+        done
+        return "$any_failed"
+    fi
+
+    is_known_model "$target" || die "Unknown model profile: $target"
+    status_model "$target"
+}
+
+cmd_is_running() {
+    local target=${command_model:-}
+    [ -n "$target" ] || die "is-running requires a model profile"
+    is_known_model "$target" || die "Unknown model profile: $target"
+    cleanup_stale_pid_for "$target"
+    is_running_model "$target"
+}
+
+cmd_logs() {
+    local target=${command_model:-}
+    local lines=${command_arg:-40}
+    [ -n "$target" ] || die "logs requires a model profile"
+    is_known_model "$target" || die "Unknown model profile: $target"
+
+    ensure_state_dir
+    local log_file
+    log_file=$(log_file_for "$target")
+    if [ ! -f "$log_file" ]; then
+        msg_yellow "No log file yet: $log_file"
+        return 0
+    fi
+    run tail -n "$lines" "$log_file"
+}
+
+cmd_follow_logs() {
+    local target=${command_model:-}
+    [ -n "$target" ] || die "follow-logs requires a model profile"
+    is_known_model "$target" || die "Unknown model profile: $target"
+
+    ensure_state_dir
+    local log_file
+    log_file=$(log_file_for "$target")
+    run touch "$log_file"
+    run tail -f "$log_file"
+}
+
+cmd_doctor() {
+    printf "llm-server doctor\n"
+    printf "state_dir=%s\n" "$state_dir"
+    printf "swiftlm_bin=%s\n" "$swiftlm_bin"
+
+    if command -v "$swiftlm_bin" >/dev/null 2>&1; then
+        printf "swiftlm_resolved=%s\n" "$(command -v "$swiftlm_bin")"
+    else
+        printf "swiftlm_resolved=missing\n"
+        printf "hint=Install SwiftLM and/or set LLM_SERVER_BIN\n"
+    fi
+
+    cmd_status || true
+}
+
+main() {
+    process_arguments "$@"
+
+    case "$command_name" in
+        list)
+            cmd_list
+            ;;
+        start)
+            cmd_start
+            ;;
+        stop)
+            cmd_stop
+            ;;
+        restart)
+            cmd_restart
+            ;;
+        status)
+            cmd_status
+            ;;
+        is-running)
+            cmd_is_running
+            ;;
+        logs)
+            cmd_logs
+            ;;
+        follow-logs)
+            cmd_follow_logs
+            ;;
+        doctor)
+            cmd_doctor
+            ;;
+        *)
+            msg_red "Unknown command: $command_name"
+            usage >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
