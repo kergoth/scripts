@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ensure_docker() {
+    if docker info >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ "$(uname -s)" = "Darwin" ] && command -v colima >/dev/null 2>&1; then
+        echo "Docker not running, starting colima..."
+        colima start
+    else
+        echo "Docker is not running" >&2
+        return 1
+    fi
+}
+
+main() {
+    local allium_dir="${ALLIUM_DIR:-}"
+
+    if [ -z "$allium_dir" ]; then
+        allium_dir="$(ghq list -p goweiwen/Allium 2>/dev/null || true)"
+        if [ -z "$allium_dir" ]; then
+            ghq get goweiwen/Allium
+            allium_dir="$(ghq list -p goweiwen/Allium)"
+        fi
+    fi
+
+    ensure_docker
+
+    cd "$allium_dir"
+
+    nix run 'nixpkgs#devenv' -- shell -- make all
+
+    local version
+    version="$(git describe --always --dirty --tags)-$(date +%Y%m%d)"
+
+    cd dist
+    zip -r "../allium-${version}.zip" .allium .tmp_update RetroArch Apps BIOS Roms Saves Themes
+
+    echo "Created: allium-${version}.zip"
+}
+
+main "$@"
