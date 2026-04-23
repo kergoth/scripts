@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Usage: build-onion [options]
+#
+# Build OnionUI for Miyoo Mini Flip using the Docker toolchain.
+# Stamps a version derived from git describe and creates a release zip.
+#
+# Options:
+#     -V VERSION  Override the version string (default: git describe + date)
+#     -C          Force full clean before build (default: invalidate setup only)
+#     -n          Dry run, don't actually do anything
+#     -v          Increase verbosity, can be specified multiple times
+#     -q          Decrease verbosity, can be specified multiple times
+#     -h          Show this help message
+
+set -euo pipefail
+
+scriptname=${BASH_SOURCE[0]##*/}
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    while getopts V:Cnvqh opt; do
+        case "$opt" in
+        V) version_override=$OPTARG ;;
+        C) force_clean=1 ;;
+        n) dry_run=1 ;;
+        v) verbosity=$((verbosity + 1)) ;;
+        q) verbosity=$((verbosity - 1)) ;;
+        h) show_help; exit 0 ;;
+        \?)
+            echo "Unknown option: -$OPTARG" >&2
+            show_help >&2
+            exit 1
+            ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+}
+
+msg() {
+    fmt=$1
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+msg_color() {
+    local color=$1
+    shift
+    local fmt=$1
+    shift
+    # shellcheck disable=SC2059
+    if [ -n "${NO_COLOR:-}" ] || { [ -z "${COLOR:-}" ] && ! [ -t 1 ]; }; then
+        printf "${fmt}\n" "$@" >&2
+        return
+    else
+        printf "\033[${color}m${fmt}\033[0m\n" "$@" >&2
+    fi
+}
+
+msg_blue()   { msg_color "34" "$@"; }
+msg_green()  { msg_color "32" "$@"; }
+msg_red()    { msg_color "31" "$@"; }
+msg_yellow() { msg_color "33" "$@"; }
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg_yellow "$@"
+    fi
+}
+
+die() {
+    msg_red "$@"
+    exit 1
+}
+
+run() {
+    if [ "${dry_run:-0}" = "1" ] || [ "${verbosity:-0}" -gt 0 ]; then
+        printf '❯ %s\n' "$(printcmd "$@")" >&2
+    fi
+    if [ "${dry_run:-0}" != "1" ]; then
+        "$@" || return $?
+    fi
+}
+
+ensure_docker() {
+    if docker info >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ "$(uname -s)" = "Darwin" ] && command -v colima >/dev/null 2>&1; then
+        msg "Docker not running, starting colima..."
+        colima start
+    else
+        die "Docker is not running"
+    fi
+}
+
+main() {
+    local version_override=
+    local force_clean=0
+    local dry_run=0
+    local verbosity=0
+
+    process_arguments "$@"
+
+    local onion_dir
+    onion_dir="$(ghq list -p OnionUI/Onion 2>/dev/null || true)"
+    if [ -z "$onion_dir" ]; then
+        die "Could not find OnionUI/Onion in ghq. Run: ghq get OnionUI/Onion"
+    fi
+
+    ensure_docker
+    export DOCKER_DEFAULT_PLATFORM=linux/amd64
+
+    local version
+    if [ -n "$version_override" ]; then
+        version=$version_override
+    else
+        version="$(git -C "$onion_dir" describe --always --dirty --tags)-$(date +%Y%m%d)"
+    fi
+
+    msg_blue "Building Onion %s" "$version"
+
+    if [ "$force_clean" -eq 1 ]; then
+        run make -C "$onion_dir" with-toolchain CMD=clean
+    else
+        # Deleting .setup forces version re-stamping without clearing compiled objects
+        run rm -f "$onion_dir/cache/.setup"
+    fi
+
+    run make -C "$onion_dir" with-toolchain "CMD=release VERSION_OVERRIDE=$version"
+
+    local zip="$onion_dir/release/Onion-v${version}.zip"
+    if [ -f "$zip" ]; then
+        msg_green "Created: %s" "$zip"
+    fi
+}
+
+main "$@"
