@@ -157,9 +157,9 @@ model_config() {
     model_extra_args=()
     case "$name" in
         quick)
-            model_id="mlx-community/Devstral-Small-2505-4bit"
+            model_id="mlx-community/Qwen3-4B-Instruct-2507-4bit"
             model_port="5415"
-            model_extra_args=(--ctx-size 16384 --parallel 1)
+            model_extra_args=(--ctx-size 32768 --parallel 1)
             ;;
         coder)
             model_id="mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
