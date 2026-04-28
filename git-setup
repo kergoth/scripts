@@ -1,6 +1,21 @@
 #!/bin/sh
+# Usage: git-setup [git-init-options] [directory]
+#
+# Initialize a git repository with an empty root commit, then create
+# an initial commit from the working tree. Any options before the
+# directory are forwarded to `git init`.
+#
+# Options:
+#     -h, --help    Show this help message
 
 set -eu
+
+case "${1:-}" in
+    -h|--help)
+        sed -n '/^# Usage:/,/^# *-h[, ]/p' "$0" | sed 's/^# //;s/^#$//'
+        exit 0
+        ;;
+esac
 
 directory=
 for arg; do
