@@ -1343,3 +1343,19 @@ def test_group_by_url_case_normalized(script):
     ]
     groups = script.group_by_url(docs)
     assert len(groups) == 1
+
+
+def test_doc_label_collapses_multiline_title(script):
+    doc = make_doc("1")
+    doc["title"] = "Zed is 1.0\nZed is 1.0"
+    label = script.doc_label(doc)
+    assert "\n" not in label
+    assert "Zed is 1.0 Zed is 1.0" in label
+
+
+def test_deletion_table_collapses_multiline_cells(script):
+    doc = make_doc("1", url="https://example.com/a")
+    doc["title"] = "Line one\nLine two"
+    table = script.deletion_table([doc])
+    rendered = render_table_text(table)
+    assert "Line one Line two" in rendered

@@ -742,13 +742,20 @@ def delete_document(token: str, doc_id: str) -> bool:
 
 
 def doc_label(doc: dict) -> str:
-    title = (doc.get("title") or "Untitled")[:50].replace("|", "·")
-    loc = doc.get("location", "?")
+    title = display_value(doc.get("title") or "Untitled", max_len=50).replace("|", "·")
+    loc = display_value(doc.get("location", "?"))
     highlights = doc.get("num_highlights", 0)
     tags = len(doc.get("tags") or {})
-    created = (doc.get("created_at") or "")[:10]
+    created = display_value(doc.get("created_at") or "", max_len=10)
     score = score_doc(doc)
     return f"{title} | {loc} | {highlights}h | {tags}t | {created} | score={score}"
+
+
+def display_value(value: object, max_len: int | None = None) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if max_len is not None:
+        return text[:max_len]
+    return text
 
 
 def show_dup_group(url: str, docs: list[dict], keeper: dict | None) -> None:
@@ -768,12 +775,12 @@ def deletion_table(to_delete: list[dict]) -> Table:
     table.add_column("Created")
     for doc in to_delete:
         table.add_row(
-            (doc.get("title") or "")[:40],
-            (doc.get("source_url") or "")[:45],
-            doc.get("location", ""),
+            display_value(doc.get("title") or "", max_len=40),
+            display_value(doc.get("source_url") or "", max_len=45),
+            display_value(doc.get("location", "")),
             str(doc.get("num_highlights", "?")),
             str(len(doc.get("tags") or {})),
-            (doc.get("created_at") or "")[:10],
+            display_value(doc.get("created_at") or "", max_len=10),
         )
     return table
 
