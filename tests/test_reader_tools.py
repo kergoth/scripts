@@ -891,6 +891,56 @@ def test_run_check_links_csv_keeps_logs_and_checkpoints_off_stdout(script, monke
     assert "checkpoint completed=1/1 failures=1" in captured.err
 
 
+def test_run_check_links_progress_uses_stderr_tty_not_result_format(script, monkeypatch):
+    monkeypatch.setattr(script, "setup_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(script, "resolve_token", lambda: "token")
+    monkeypatch.setattr(script, "refresh_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(script, "load_cache", lambda: [{"id": "x"}])
+    monkeypatch.setattr(
+        script,
+        "collect_check_link_candidates",
+        lambda docs: [{"id": "doc-1", "url": "u", "source_url": "s", "tag_count": 0, "highlight_count": 0}],
+    )
+    monkeypatch.setattr(script, "choose_output_format", lambda _requested: "plain")
+    monkeypatch.setattr(script, "choose_progress_output_format", lambda: "rich")
+    monkeypatch.setattr(script, "render_check_links_results", lambda *args, **kwargs: None)
+
+    class FakeProgress:
+        was_used = False
+        updates = []
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            type(self).was_used = True
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def add_task(self, _description, total=0):
+            self.total = total
+            return "task-1"
+
+        def update(self, task_id, completed=0, description=""):
+            type(self).updates.append((task_id, completed, description))
+
+    async def _check(*args, **kwargs):
+        checkpoint_cb = kwargs.get("checkpoint_cb")
+        if checkpoint_cb:
+            checkpoint_cb({"completed": 1, "total": 1, "failures": 0, "timestamp": 1.0})
+        return []
+
+    monkeypatch.setattr(script, "Progress", FakeProgress)
+    monkeypatch.setattr(script, "check_links_async", _check)
+
+    args = script.parse_args(["check-links", "--no-refresh", "-F", "plain"])
+    script.run_check_links(args)
+    assert FakeProgress.was_used
+    assert FakeProgress.updates
+
+
 def test_collect_check_link_candidates_filters_out_unsupported_docs(script):
     docs = [
         {"id": "a", "source_url": "https://a", "url": "https://rw/a", "location": "archive", "tags": {}, "parent_id": None},

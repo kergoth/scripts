@@ -1010,8 +1010,9 @@ def run_check_links(args: argparse.Namespace) -> None:
     docs = load_cache()
     candidate_rows = collect_check_link_candidates(docs)
     fmt = choose_output_format(args.format)
+    progress_fmt = choose_progress_output_format()
 
-    if fmt == "rich":
+    if progress_fmt == "rich":
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
