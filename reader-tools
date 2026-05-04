@@ -17,6 +17,7 @@ import csv
 import json
 import logging
 import os
+import re
 import socket
 import ssl
 import shutil
@@ -58,6 +59,7 @@ CHECK_LINKS_RESULT_COLUMNS: tuple[str, ...] = (
     "classification",
     "reason",
 )
+CHECK_LINKS_REQUIRED_COLUMNS: tuple[str, ...] = ("id", "classification", "reason")
 
 
 def resolve_token() -> str:
@@ -181,6 +183,39 @@ def add_check_links_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_tag_check_links_arguments(parser: argparse.ArgumentParser) -> None:
+    add_cache_arguments(parser)
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        help="Do not refresh cache; tag from existing cached documents only",
+    )
+    parser.add_argument(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="Show planned updates without writing tags",
+    )
+    parser.add_argument(
+        "--tag-prefix",
+        default="link",
+        help="Prefix for generated tags (default: link)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=parse_positive_int,
+        default=50,
+        metavar="N",
+        help="Maximum bulk update size, 1-50 (default: 50)",
+    )
+    parser.add_argument(
+        "csv_file",
+        nargs="?",
+        default="-",
+        help="Path to check-links CSV output ('-' for stdin, default)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Readwise Reader library maintenance utilities"
@@ -207,6 +242,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Check upstream source_url links for dead or error responses",
     )
     add_check_links_arguments(check_links_parser)
+
+    tag_check_links_parser = subparsers.add_parser(
+        "tag-check-links",
+        help="Apply tags to Reader documents from check-links CSV output",
+        description="Apply tags to Reader documents from check-links CSV output",
+    )
+    add_tag_check_links_arguments(tag_check_links_parser)
     return parser
 
 
@@ -221,7 +263,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if not args_in:
         args_in = ["dedupe"]
     elif args_in[0].startswith("-"):
-        commands = {"dedupe", "stats", "check-links"}
+        commands = {"dedupe", "stats", "check-links", "tag-check-links"}
         command_index = next(
             (i for i, arg in enumerate(args_in) if arg in commands),
             None,
@@ -1000,6 +1042,219 @@ def render_check_links_results(rows: list[dict], fmt: str) -> None:
     console.print(table)
 
 
+def normalize_tag_component(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower())
+    normalized = normalized.strip("_")
+    return normalized or "unknown"
+
+
+def read_check_links_rows(csv_file: str) -> list[dict]:
+    if csv_file == "-":
+        stream = sys.stdin
+        close_stream = False
+    else:
+        stream = open(csv_file, newline="", encoding="utf-8")
+        close_stream = True
+
+    try:
+        reader = csv.DictReader(stream)
+        if not reader.fieldnames:
+            raise ValueError("CSV input is empty or missing a header row")
+
+        missing = [name for name in CHECK_LINKS_REQUIRED_COLUMNS if name not in reader.fieldnames]
+        if missing:
+            raise ValueError(
+                "CSV input is missing required columns: "
+                + ", ".join(missing)
+            )
+
+        rows: list[dict] = []
+        for row in reader:
+            rows.append(row)
+        return rows
+    finally:
+        if close_stream:
+            stream.close()
+
+
+def group_check_links_rows(rows: list[dict], tag_prefix: str) -> dict[str, set[str]]:
+    prefix = normalize_tag_component(tag_prefix)
+    groups: dict[str, set[str]] = {}
+
+    for row in rows:
+        doc_id = (row.get("id") or "").strip()
+        classification = (row.get("classification") or "").strip()
+        reason = (row.get("reason") or "").strip()
+        if not doc_id or not classification or not reason:
+            continue
+
+        tag = (
+            f"{prefix}_"
+            f"{normalize_tag_component(classification)}_"
+            f"{normalize_tag_component(reason)}"
+        )
+        groups.setdefault(tag, set()).add(doc_id)
+
+    return groups
+
+
+def get_doc_tag_names(doc: dict) -> set[str]:
+    tags = doc.get("tags")
+    if isinstance(tags, dict):
+        return set(tags.keys())
+    if isinstance(tags, list):
+        values = set()
+        for item in tags:
+            if isinstance(item, str):
+                values.add(item)
+            elif isinstance(item, dict):
+                name = item.get("name") or item.get("key")
+                if isinstance(name, str):
+                    values.add(name)
+        return values
+    return set()
+
+
+def iter_batches(values: list[dict], batch_size: int) -> Iterator[list[dict]]:
+    for start in range(0, len(values), batch_size):
+        yield values[start:start + batch_size]
+
+
+def bulk_update_documents(token: str, updates: list[dict]) -> tuple[set[str], dict[str, str]]:
+    headers = {"Authorization": f"Token {token}"}
+    with httpx.Client(headers=headers, timeout=30) as client:
+        while True:
+            resp = client.patch(
+                f"{BASE_URL}/bulk_update/",
+                json={"updates": updates},
+            )
+            if resp.status_code != 429:
+                break
+            wait = int(resp.headers.get("retry-after", "60"))
+            log.debug("Rate limited; retrying in %ds", wait)
+            time.sleep(wait)
+
+        if resp.status_code not in (200, 207):
+            resp.raise_for_status()
+
+        data = resp.json()
+        results = data.get("results")
+
+        if not isinstance(results, list):
+            # Older responses may omit per-item status when all updates succeed.
+            return ({update["id"] for update in updates}, {})
+
+        successes: set[str] = set()
+        failures: dict[str, str] = {}
+        for item in results:
+            doc_id = str(item.get("id", ""))
+            if not doc_id:
+                continue
+            if item.get("success", False):
+                successes.add(doc_id)
+            else:
+                failures[doc_id] = str(item.get("error") or "unknown error")
+        return successes, failures
+
+
+def apply_tag_updates(
+    token: str,
+    updates_by_tag: dict[str, list[dict]],
+    docs_by_id: dict[str, dict],
+    batch_size: int,
+    count_interval: int = 250,
+    time_interval: float = 10.0,
+) -> tuple[int, int]:
+    total = sum(len(updates) for updates in updates_by_tag.values())
+    if total == 0:
+        return (0, 0)
+
+    progress_fmt = choose_progress_output_format()
+    completed = 0
+    succeeded = 0
+    failed = 0
+    last_completed = 0
+    last_time = time.monotonic()
+    safe_count_interval = max(1, int(count_interval))
+    safe_time_interval = max(0.001, float(time_interval))
+
+    def _apply_batch(tag: str, batch: list[dict]) -> None:
+        nonlocal completed, succeeded, failed
+        tags_by_doc_id = {item["id"]: item["tags"] for item in batch}
+        success_ids, failure_by_id = bulk_update_documents(token, batch)
+
+        returned_ids = success_ids | set(failure_by_id.keys())
+        missing_ids = set(tags_by_doc_id.keys()) - returned_ids
+        for doc_id in missing_ids:
+            failure_by_id[doc_id] = "no per-item result returned"
+
+        completed += len(batch)
+        succeeded += len(success_ids)
+        failed += len(failure_by_id)
+
+        for doc_id in success_ids:
+            doc = docs_by_id.get(doc_id)
+            if doc is None:
+                continue
+            tag_names = tags_by_doc_id.get(doc_id, [])
+            doc["tags"] = {name: {} for name in tag_names}
+            save_doc(doc)
+
+        for doc_id, error in sorted(failure_by_id.items()):
+            log.warning("Tag update failed id=%s tag=%s error=%s", doc_id, tag, error)
+
+    if progress_fmt == "rich":
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=log_console,
+            transient=True,
+        ) as progress:
+            task_id = progress.add_task("Applying tags…", total=total)
+            for tag, updates in sorted(updates_by_tag.items()):
+                for batch in iter_batches(updates, batch_size):
+                    _apply_batch(tag, batch)
+                    progress.update(
+                        task_id,
+                        completed=completed,
+                        description=f"Applying tags… ({succeeded}/{total} ok, {failed} failed)",
+                    )
+    else:
+        for tag, updates in sorted(updates_by_tag.items()):
+            for batch in iter_batches(updates, batch_size):
+                _apply_batch(tag, batch)
+                now = time.monotonic()
+                if should_emit_checkpoint(
+                    completed=completed,
+                    last_completed=last_completed,
+                    now=now,
+                    last_time=last_time,
+                    count_interval=safe_count_interval,
+                    time_interval=safe_time_interval,
+                ):
+                    sys.stderr.write(
+                        "checkpoint "
+                        f"completed={completed}/{total} "
+                        f"succeeded={succeeded} failed={failed}\n"
+                    )
+                    sys.stderr.flush()
+                    last_completed = completed
+                    last_time = now
+
+        if completed != last_completed:
+            sys.stderr.write(
+                "checkpoint "
+                f"completed={completed}/{total} "
+                f"succeeded={succeeded} failed={failed}\n"
+            )
+            sys.stderr.flush()
+
+    return (succeeded, failed)
+
+
 def run_check_links(args: argparse.Namespace) -> None:
     setup_logging(args.verbose, args.quiet)
     token = resolve_token()
@@ -1065,6 +1320,91 @@ def run_check_links(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def run_tag_check_links(args: argparse.Namespace) -> None:
+    setup_logging(args.verbose, args.quiet)
+
+    if args.batch_size > 50:
+        raise SystemExit("--batch-size cannot exceed 50")
+
+    token = resolve_token()
+    if not args.no_refresh:
+        refresh_cache(token, full=args.refresh, max_age=args.max_age)
+
+    rows = read_check_links_rows(args.csv_file)
+    groups = group_check_links_rows(rows, args.tag_prefix)
+
+    if not groups:
+        console.print("[green]No taggable rows found in CSV input.[/green]")
+        return
+
+    docs = load_cache()
+    docs_by_id = {str(doc.get("id", "")): doc for doc in docs if doc.get("id")}
+
+    updates_by_tag: dict[str, list[dict]] = {}
+    skipped_missing = 0
+    skipped_already_tagged = 0
+
+    for tag, doc_ids in sorted(groups.items()):
+        tag_updates: list[dict] = []
+        for doc_id in sorted(doc_ids):
+            doc = docs_by_id.get(doc_id)
+            if doc is None:
+                skipped_missing += 1
+                continue
+
+            existing_tags = get_doc_tag_names(doc)
+            if tag in existing_tags:
+                skipped_already_tagged += 1
+                continue
+
+            new_tags = sorted(existing_tags | {tag})
+            tag_updates.append({"id": doc_id, "tags": new_tags})
+
+        if tag_updates:
+            updates_by_tag[tag] = tag_updates
+
+    total_updates = sum(len(updates) for updates in updates_by_tag.values())
+    total_groups = len(updates_by_tag)
+
+    summary = Table(title="Tag Check Links Plan")
+    summary.add_column("Tag", style="cyan")
+    summary.add_column("Docs", justify="right")
+    for tag, updates in sorted(updates_by_tag.items()):
+        summary.add_row(tag, str(len(updates)))
+    console.print(summary)
+    console.print(
+        f"Planned updates: {total_updates} docs across {total_groups} tag groups."
+    )
+    if skipped_missing or skipped_already_tagged:
+        console.print(
+            "Skipped:"
+            f" missing-from-cache={skipped_missing},"
+            f" already-tagged={skipped_already_tagged}"
+        )
+
+    if total_updates == 0:
+        console.print("[green]No document updates needed.[/green]")
+        return
+
+    if args.dry_run:
+        console.print("[yellow]Dry run — no API updates sent.[/yellow]")
+        return
+
+    succeeded, failed = apply_tag_updates(
+        token=token,
+        updates_by_tag=updates_by_tag,
+        docs_by_id=docs_by_id,
+        batch_size=args.batch_size,
+    )
+
+    console.print(
+        f"[green]Applied tags to {succeeded} documents[/green]"
+        f" ([red]{failed} failed[/red])."
+    )
+    if failed:
+        raise SystemExit(1)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.command == "dedupe":
@@ -1075,6 +1415,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "check-links":
         run_check_links(args)
+        return
+    if args.command == "tag-check-links":
+        run_tag_check_links(args)
         return
     raise AssertionError(f"Unhandled command: {args.command}")
 

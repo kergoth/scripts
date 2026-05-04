@@ -143,6 +143,25 @@ def test_parse_args_explicit_check_links(script):
     assert args.verbose == 1
 
 
+def test_parse_args_explicit_tag_check_links(script):
+    args = script.parse_args([
+        "tag-check-links",
+        "--no-refresh",
+        "--batch-size", "25",
+        "--tag-prefix", "link",
+        "-n",
+        "-v",
+        "check-links.csv",
+    ])
+    assert args.command == "tag-check-links"
+    assert args.no_refresh
+    assert args.batch_size == 25
+    assert args.tag_prefix == "link"
+    assert args.dry_run
+    assert args.verbose == 1
+    assert args.csv_file == "check-links.csv"
+
+
 def test_parse_args_check_links_rejects_negative_retries(script):
     with pytest.raises(SystemExit) as exc_info:
         script.parse_args(["check-links", "--retries", "-1"])
@@ -165,6 +184,13 @@ def test_parse_args_allows_global_flags_before_stats_subcommand(script):
 def test_parse_args_allows_global_flags_before_check_links_subcommand(script):
     args = script.parse_args(["-q", "check-links", "--no-refresh"])
     assert args.command == "check-links"
+    assert args.quiet == 1
+    assert args.no_refresh
+
+
+def test_parse_args_allows_global_flags_before_tag_check_links_subcommand(script):
+    args = script.parse_args(["-q", "tag-check-links", "--no-refresh"])
+    assert args.command == "tag-check-links"
     assert args.quiet == 1
     assert args.no_refresh
 
@@ -267,6 +293,69 @@ def test_classification_retriable_semantics_timeout_and_connect(script):
     connect_exc = httpx.ConnectError("connection refused", request=req)
     assert script.classify_request_exception(timeout_exc) == ("dead", "timeout", True)
     assert script.classify_request_exception(connect_exc) == ("dead", "connect", True)
+
+
+def test_normalize_tag_component(script):
+    assert script.normalize_tag_component(" HTTP 404 ") == "http_404"
+    assert script.normalize_tag_component("dns") == "dns"
+    assert script.normalize_tag_component("___") == "unknown"
+
+
+def test_group_check_links_rows(script):
+    rows = [
+        {"id": "a", "classification": "dead", "reason": "http_404"},
+        {"id": "b", "classification": "dead", "reason": "http_404"},
+        {"id": "c", "classification": "dead", "reason": "dns"},
+    ]
+    grouped = script.group_check_links_rows(rows, "link")
+    assert grouped["link_dead_http_404"] == {"a", "b"}
+    assert grouped["link_dead_dns"] == {"c"}
+
+
+def test_get_doc_tag_names(script):
+    assert script.get_doc_tag_names({"tags": {"a": {}, "b": {}}}) == {"a", "b"}
+    assert script.get_doc_tag_names({"tags": ["a", "b"]}) == {"a", "b"}
+    assert script.get_doc_tag_names({"tags": [{"name": "a"}, {"key": "b"}]}) == {"a", "b"}
+
+
+def test_bulk_update_documents_handles_207_partial_failures(script, monkeypatch):
+    class FakeResponse:
+        def __init__(self):
+            self.status_code = 207
+            self.headers = {}
+
+        def json(self):
+            return {
+                "results": [
+                    {"id": "ok-1", "success": True},
+                    {"id": "bad-1", "success": False, "error": "Document not found"},
+                ]
+            }
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def patch(self, _url, json):
+            assert "updates" in json
+            return FakeResponse()
+
+    monkeypatch.setattr(script.httpx, "Client", FakeClient)
+    success, failures = script.bulk_update_documents(
+        "token",
+        [{"id": "ok-1", "tags": ["x"]}, {"id": "bad-1", "tags": ["y"]}],
+    )
+    assert success == {"ok-1"}
+    assert failures == {"bad-1": "Document not found"}
 
 
 def test_classify_request_exception_generic_error_retriable(script):
@@ -719,6 +808,44 @@ def test_delete_documents_plain_emits_checkpoint_lines(script, monkeypatch, caps
     assert "checkpoint completed=3/3 deleted=3" in captured.err
 
 
+def test_apply_tag_updates_plain_emits_checkpoint_lines(script, monkeypatch, capsys):
+    docs_by_id = {
+        "a": {"id": "a", "tags": {}},
+        "b": {"id": "b", "tags": {}},
+        "c": {"id": "c", "tags": {}},
+    }
+    updates_by_tag = {
+        "link_dead_http_404": [
+            {"id": "a", "tags": ["link_dead_http_404"]},
+            {"id": "b", "tags": ["link_dead_http_404"]},
+            {"id": "c", "tags": ["link_dead_http_404"]},
+        ]
+    }
+
+    monkeypatch.setattr(script, "choose_progress_output_format", lambda: "plain")
+    monkeypatch.setattr(
+        script,
+        "bulk_update_documents",
+        lambda _token, batch: ({item["id"] for item in batch}, {}),
+    )
+    monkeypatch.setattr(script, "save_doc", lambda _doc: None)
+
+    succeeded, failed = script.apply_tag_updates(
+        token="token",
+        updates_by_tag=updates_by_tag,
+        docs_by_id=docs_by_id,
+        batch_size=2,
+        count_interval=2,
+        time_interval=999.0,
+    )
+
+    captured = capsys.readouterr()
+    assert succeeded == 3
+    assert failed == 0
+    assert "checkpoint completed=2/3 succeeded=2 failed=0" in captured.err
+    assert "checkpoint completed=3/3 succeeded=3 failed=0" in captured.err
+
+
 def test_delete_document_rate_limit_logs_at_debug(script, monkeypatch):
     class FakeResponse:
         def __init__(self, status_code, retry_after=None):
@@ -840,6 +967,59 @@ def test_run_check_links_no_refresh_skips_refresh(script, monkeypatch):
     args = script.parse_args(["check-links", "--no-refresh", "-F", "plain"])
     script.run_check_links(args)
     assert not refresh_called["value"]
+
+
+def test_run_tag_check_links_dry_run(script, monkeypatch):
+    monkeypatch.setattr(script, "setup_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(script, "resolve_token", lambda: "token")
+    monkeypatch.setattr(script, "refresh_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        script,
+        "read_check_links_rows",
+        lambda _path: [{"id": "doc-1", "classification": "dead", "reason": "http_404"}],
+    )
+    monkeypatch.setattr(script, "load_cache", lambda: [{"id": "doc-1", "tags": {"existing": {}}, "location": "new"}])
+
+    bulk_calls = []
+    monkeypatch.setattr(script, "bulk_update_documents", lambda *_args, **_kwargs: bulk_calls.append(1))
+
+    args = script.parse_args(["tag-check-links", "--no-refresh", "-n", "check-links.csv"])
+    script.run_tag_check_links(args)
+    assert bulk_calls == []
+
+
+def test_run_tag_check_links_applies_updates(script, monkeypatch):
+    monkeypatch.setattr(script, "setup_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(script, "resolve_token", lambda: "token")
+    monkeypatch.setattr(script, "refresh_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        script,
+        "read_check_links_rows",
+        lambda _path: [{"id": "doc-1", "classification": "dead", "reason": "http_404"}],
+    )
+
+    docs = [{"id": "doc-1", "tags": {"existing": {}}, "location": "new"}]
+    monkeypatch.setattr(script, "load_cache", lambda: docs)
+
+    bulk_payloads = []
+
+    def _bulk_update(_token, updates):
+        bulk_payloads.append(updates)
+        return {"doc-1"}, {}
+
+    monkeypatch.setattr(script, "bulk_update_documents", _bulk_update)
+
+    saved_docs = []
+    monkeypatch.setattr(script, "save_doc", lambda doc: saved_docs.append(doc.copy()))
+
+    args = script.parse_args(["tag-check-links", "--no-refresh", "check-links.csv"])
+    script.run_tag_check_links(args)
+
+    assert len(bulk_payloads) == 1
+    assert bulk_payloads[0][0]["id"] == "doc-1"
+    assert "link_dead_http_404" in bulk_payloads[0][0]["tags"]
+    assert len(saved_docs) == 1
+    assert "link_dead_http_404" in saved_docs[0]["tags"]
 
 
 def test_run_check_links_csv_keeps_logs_and_checkpoints_off_stdout(script, monkeypatch, capsys):
