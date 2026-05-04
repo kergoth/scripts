@@ -1,0 +1,1082 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "httpx>=0.27",
+#   "rich>=13",
+#   "questionary>=2",
+#   "platformdirs>=4",
+# ]
+# ///
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import csv
+import json
+import logging
+import os
+import socket
+import ssl
+import shutil
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable, Iterator
+
+import httpx
+import questionary
+from platformdirs import user_cache_path
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
+from rich.table import Table
+
+console = Console()
+log_console = Console(stderr=True)
+log = logging.getLogger(__name__)
+
+BASE_URL = "https://readwise.io/api/v3"
+LOCATION_PRIORITY: dict[str, int] = {
+    "shortlist": 4, "archive": 3, "later": 2, "new": 1, "feed": 0
+}
+STATS_LOCATION_ROWS: list[tuple[str, str]] = [
+    ("feed", "Feed"),
+    ("archive", "Archive"),
+    ("later", "Later"),
+    ("shortlist", "Shortlist"),
+    ("new", "Inbox"),
+]
+CHECK_LINKS_RESULT_COLUMNS: tuple[str, ...] = (
+    "id",
+    "url",
+    "source_url",
+    "tag_count",
+    "highlight_count",
+    "classification",
+    "reason",
+)
+
+
+def resolve_token() -> str:
+    if token := os.environ.get("READWISE_TOKEN"):
+        log.debug("Using READWISE_TOKEN from environment")
+        return token
+    cli_config = Path.home() / ".readwise-cli.json"
+    if cli_config.exists():
+        try:
+            data = json.loads(cli_config.read_text())
+            # Only use CLI credentials if they're a personal access token, not OAuth.
+            # OAuth tokens from `npx @readwise/cli login` don't work with the v3 API.
+            if data.get("auth_type") != "oauth":
+                if token := data.get("access_token") or data.get("token"):
+                    log.debug("Using token from ~/.readwise-cli.json")
+                    return token
+        except json.JSONDecodeError:
+            pass
+    console.print("[red]No Readwise token found.[/]")
+    console.print("  Set READWISE_TOKEN to your personal access token:")
+    console.print("  https://readwise.io/access_token")
+    console.print("  (The CLI's OAuth token from 'npx @readwise/cli login' is not supported)")
+    sys.exit(1)
+
+
+def setup_logging(verbose: int, quiet: int) -> None:
+    levels = [logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG]
+    index = max(0, min(len(levels) - 1, 2 + verbose - quiet))  # default: INFO
+    logging.basicConfig(
+        level=levels[index],
+        handlers=[RichHandler(console=log_console, show_path=False, markup=True)],
+        format="%(message)s",
+        force=True,
+    )
+    # httpx and httpcore both log internal request/response events at INFO/DEBUG.
+    # Suppress both — our own log.debug statements at call sites are sufficient.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def add_cache_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--refresh", action="store_true", help="Force full cache re-fetch")
+    parser.add_argument(
+        "--max-age", type=int, default=3600, metavar="SECONDS",
+        help="Max cache age before refresh, in seconds (default: 3600)",
+    )
+    parser.add_argument("-v", "--verbose", action="count", default=0,
+                        help="Increase verbosity (repeatable)")
+    parser.add_argument("-q", "--quiet", action="count", default=0,
+                        help="Decrease verbosity (repeatable)")
+
+
+def parse_non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return parsed
+
+
+def parse_positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return parsed
+
+
+def add_dedupe_arguments(parser: argparse.ArgumentParser) -> None:
+    add_cache_arguments(parser)
+    parser.add_argument("-n", "--dry-run", action="store_true",
+                        help="Show planned deletions without deleting")
+
+
+def add_stats_arguments(parser: argparse.ArgumentParser) -> None:
+    add_cache_arguments(parser)
+    parser.add_argument(
+        "--all-locations",
+        action="store_true",
+        help="Show location rows even when their count is zero",
+    )
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        help="Do not refresh cache; report stats from existing cached documents only",
+    )
+
+
+def add_check_links_arguments(parser: argparse.ArgumentParser) -> None:
+    add_cache_arguments(parser)
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        help="Do not refresh cache; check links from existing cached documents only",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=25,
+        metavar="N",
+        help="Maximum number of concurrent link checks (default: 25)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=parse_positive_int,
+        default=10,
+        metavar="SECONDS",
+        help="Per-request timeout in seconds (default: 10)",
+    )
+    parser.add_argument(
+        "--retries",
+        type=parse_non_negative_int,
+        default=3,
+        metavar="N",
+        help="Maximum retries for transient failures (default: 3)",
+    )
+    parser.add_argument(
+        "-F",
+        "--format",
+        choices=("plain", "rich", "csv"),
+        default=None,
+        help="Output format for check-links results",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Readwise Reader library maintenance utilities"
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    dedupe_parser = subparsers.add_parser(
+        "dedupe",
+        help="Find and remove duplicate Readwise Reader documents",
+        description="Find and remove duplicate Readwise Reader documents",
+    )
+    add_dedupe_arguments(dedupe_parser)
+
+    stats_parser = subparsers.add_parser(
+        "stats",
+        help="Show cached Readwise Reader library statistics",
+        description="Show cached Readwise Reader library statistics",
+    )
+    add_stats_arguments(stats_parser)
+
+    check_links_parser = subparsers.add_parser(
+        "check-links",
+        help="Check upstream source_url links for dead or error responses",
+        description="Check upstream source_url links for dead or error responses",
+    )
+    add_check_links_arguments(check_links_parser)
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = build_parser()
+    args_in = list(argv) if argv is not None else sys.argv[1:]
+
+    if args_in in (["-h"], ["--help"]):
+        return parser.parse_args(args_in)
+
+    # Backward compatibility: keep option-only invocations working.
+    if not args_in:
+        args_in = ["dedupe"]
+    elif args_in[0].startswith("-"):
+        commands = {"dedupe", "stats", "check-links"}
+        command_index = next(
+            (i for i, arg in enumerate(args_in) if arg in commands),
+            None,
+        )
+        if command_index is None:
+            args_in = ["dedupe", *args_in]
+        elif command_index > 0:
+            command = args_in[command_index]
+            leading_flags = args_in[:command_index]
+            trailing_args = args_in[command_index + 1:]
+            args_in = [command, *leading_flags, *trailing_args]
+
+    return parser.parse_args(args_in)
+
+
+def cache_root() -> Path:
+    return user_cache_path("reader-tools")
+
+
+def docs_dir() -> Path:
+    return cache_root() / "docs"
+
+
+def meta_path() -> Path:
+    return cache_root() / "meta.json"
+
+
+def load_meta() -> dict:
+    p = meta_path()
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
+def save_meta(meta: dict) -> None:
+    meta_path().write_text(json.dumps(meta, indent=2))
+
+
+def save_doc(doc: dict, target: Path | None = None) -> None:
+    d = target if target is not None else docs_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{doc['id']}.json").write_text(json.dumps(doc))
+
+
+def load_cache() -> list[dict]:
+    d = docs_dir()
+    if not d.exists():
+        return []
+    return [json.loads(p.read_text()) for p in d.glob("*.json")]
+
+
+def _fetch_pages(
+    token: str,
+    updated_after: str | None = None,
+    start_cursor: str | None = None,
+) -> Iterator[tuple[list[dict], str | None]]:
+    """Yield (page_of_docs, next_cursor) pairs. next_cursor is None on the last page."""
+    headers = {"Authorization": f"Token {token}"}
+    if start_cursor:
+        params: dict = {"pageCursor": start_cursor}
+    elif updated_after:
+        params = {"updatedAfter": updated_after}
+    else:
+        params = {}
+
+    with httpx.Client(headers=headers, timeout=30) as client:
+        while True:
+            log.debug("GET /list/ params=%s", params)
+            while True:
+                resp = client.get(f"{BASE_URL}/list/", params=params)
+                if resp.status_code != 429:
+                    break
+                wait = int(resp.headers.get("retry-after", "60"))
+                log.debug("Rate limited; retrying in %ds", wait)
+                time.sleep(wait)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results", [])
+            cursor = data.get("nextPageCursor")
+            log.debug("Got %d results, cursor=%s", len(results), cursor)
+            yield results, cursor
+            if not cursor:
+                break
+            params = {"pageCursor": cursor}
+
+
+def list_documents(token: str, updated_after: str | None = None) -> Iterator[dict]:
+    for page_docs, _ in _fetch_pages(token, updated_after=updated_after):
+        yield from page_docs
+
+
+def refresh_cache(token: str, full: bool = False, max_age: int = 3600) -> None:
+    meta = load_meta()
+    last_refresh = meta.get("last_refresh")
+    d = docs_dir()
+    staging = cache_root() / "docs.new"
+
+    need_full = full or not last_refresh or meta.get("in_progress", False)
+
+    if not need_full:
+        last_dt = datetime.fromisoformat(last_refresh)
+        age = (datetime.now(timezone.utc) - last_dt).total_seconds()
+        if age < max_age:
+            log.info("Cache is fresh (%.0fs old), skipping refresh", age)
+            return
+        log.info("Incremental refresh (cache %.0fs old)", age)
+        d.mkdir(parents=True, exist_ok=True)
+        count = 0
+        page = 0
+        for page_docs, _ in _fetch_pages(token, updated_after=last_refresh):
+            page += 1
+            for doc in page_docs:
+                save_doc(doc, d)
+                count += 1
+            log.info("Incremental: page %d, %d documents fetched", page, count)
+        save_meta({"last_refresh": datetime.now(timezone.utc).isoformat(), "full": False})
+        log.info("Cache updated: %d documents fetched", count)
+        return
+
+    # Full refresh: write to staging so an interrupted run doesn't destroy the prior cache
+    resume_cursor: str | None = None
+    resume_count = 0
+    if not full and meta.get("in_progress") and staging.exists():
+        resume_cursor = meta.get("cursor")
+        resume_count = meta.get("count", 0)
+        log.info("Resuming interrupted full refresh (fetched %d so far)", resume_count)
+    else:
+        log.info("Full cache refresh")
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True, exist_ok=True)
+
+    count = resume_count
+    page = 0
+    for page_docs, next_cursor in _fetch_pages(token, start_cursor=resume_cursor):
+        page += 1
+        for doc in page_docs:
+            save_doc(doc, staging)
+            count += 1
+        log.info("Full refresh: page %d, %d documents fetched", page, count)
+        if next_cursor:
+            save_meta({
+                "in_progress": True,
+                "cursor": next_cursor,
+                "count": count,
+                "last_refresh": last_refresh,
+            })
+
+    # Atomically replace docs/ with staging (old cache intact until this point)
+    if d.exists():
+        shutil.rmtree(d)
+    staging.rename(d)
+
+    save_meta({"last_refresh": datetime.now(timezone.utc).isoformat(), "full": True})
+    log.info("Cache updated: %d documents fetched", count)
+
+
+def normalize_url(url: str) -> str:
+    if not url:
+        return ""
+    url = url.strip().lower()
+    if url.startswith("http://"):
+        url = "https://" + url[7:]
+    return url
+
+
+def score_doc(doc: dict) -> tuple[int, int, int, int]:
+    """Returns (highlights, tags, location, is_https). Higher = better keeper."""
+    highlights = doc.get("num_highlights", 0) or 0
+    tags = len(doc.get("tags") or {})
+    location = LOCATION_PRIORITY.get(doc.get("location", ""), 0)
+    is_https = 1 if (doc.get("source_url") or "").startswith("https://") else 0
+    return (highlights, tags, location, is_https)
+
+
+def pick_keeper(docs: list[dict]) -> tuple[dict | None, list[dict], bool]:
+    """Returns (keeper, to_delete, is_tie).
+
+    is_tie=True when scores and created_at all match — caller must prompt user.
+    Tiebreak order: highlights > tags > location > https > oldest created_at.
+    """
+    if len(docs) <= 1:
+        return (docs[0] if docs else None), [], False
+
+    scores = {doc["id"]: score_doc(doc) for doc in docs}
+    max_score = max(scores.values())
+    top = [d for d in docs if scores[d["id"]] == max_score]
+
+    if len(top) == 1:
+        keeper = top[0]
+        return keeper, [d for d in docs if d["id"] != keeper["id"]], False
+
+    # Tiebreak: oldest created_at wins (ISO strings sort lexicographically)
+    by_date = sorted(top, key=lambda d: d.get("created_at") or "")
+    if by_date[0].get("created_at") != by_date[1].get("created_at"):
+        keeper = by_date[0]
+        return keeper, [d for d in docs if d["id"] != keeper["id"]], False
+
+    return None, [], True
+
+
+def group_by_url(docs: list[dict]) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for doc in docs:
+        if doc.get("category") in ("highlight", "note") or doc.get("parent_id"):
+            continue
+        key = normalize_url(doc.get("source_url", ""))
+        if not key:
+            continue
+        groups.setdefault(key, []).append(doc)
+    return {url: grp for url, grp in groups.items() if len(grp) > 1}
+
+
+def compute_child_counts(docs: list[dict]) -> dict[str, int]:
+    """Count child documents by parent document id."""
+    counts: dict[str, int] = {}
+    for doc in docs:
+        parent_id = doc.get("parent_id")
+        if parent_id:
+            counts[parent_id] = counts.get(parent_id, 0) + 1
+    return counts
+
+
+def collect_check_link_candidates(docs: list[dict]) -> list[dict]:
+    """Build check-links candidate rows from cached Reader documents."""
+    highlight_counts = compute_child_counts(docs)
+    rows: list[dict] = []
+    for doc in docs:
+        if doc.get("parent_id"):
+            continue
+        if doc.get("category") in ("highlight", "note"):
+            continue
+        if doc.get("location") == "feed":
+            continue
+        source_url = doc.get("source_url") or ""
+        if not normalize_url(source_url).startswith("https://"):
+            continue
+        doc_id = doc.get("id") or ""
+        rows.append({
+            "id": doc_id,
+            "url": doc.get("url") or "",
+            "source_url": source_url,
+            "tag_count": len(doc.get("tags") or {}),
+            "highlight_count": highlight_counts.get(doc_id, 0),
+        })
+    return rows
+
+
+def classify_status_code(status_code: int) -> tuple[str | None, str | None, bool]:
+    """Classify an HTTP status for link health checks.
+
+    Returns a tuple of (classification, reason, retriable).
+    `classification` and `reason` represent the final classification if retries
+    are exhausted. When retriable=True, the caller should retry before
+    finalizing that classification.
+    """
+    if 200 <= status_code < 400:
+        return (None, None, False)
+    if status_code in (404, 410):
+        return ("dead", f"http_{status_code}", False)
+    if 500 <= status_code < 600:
+        return ("error", f"http_{status_code}", True)
+    if status_code in (408, 425, 429):
+        return ("error", f"http_{status_code}", True)
+    if 400 <= status_code < 500:
+        return ("dead", f"http_{status_code}", False)
+    return ("error", f"http_{status_code}", True)
+
+
+def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        yield current
+        seen.add(id(current))
+        cause = getattr(current, "__cause__", None)
+        context = getattr(current, "__context__", None)
+        current = cause if cause is not None else context
+
+
+def _detect_dns_or_tls_reason(exc: BaseException) -> str | None:
+    for chained in _iter_exception_chain(exc):
+        if isinstance(chained, socket.gaierror):
+            return "dns"
+        if isinstance(chained, ssl.SSLError):
+            return "tls"
+
+    # Fallback to message heuristics for portability across transports/platforms.
+    message = " ".join(str(chained).lower() for chained in _iter_exception_chain(exc))
+    dns_markers = (
+        "failed to lookup address",
+        "name or service not known",
+        "nodename nor servname",
+        "temporary failure in name resolution",
+    )
+    if any(marker in message for marker in dns_markers):
+        return "dns"
+
+    tls_markers = (
+        "ssl",
+        "tls",
+        "certificate",
+    )
+    if any(marker in message for marker in tls_markers):
+        return "tls"
+
+    return None
+
+
+def classify_request_exception(exc: Exception) -> tuple[str, str, bool]:
+    """Classify request-layer failures for link health checks.
+
+    Returns (classification, reason, retriable).
+    `classification` and `reason` represent the final classification if retries
+    are exhausted. When retriable=True, the caller should retry before
+    finalizing that classification.
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return ("dead", "timeout", True)
+
+    if isinstance(exc, httpx.ConnectError):
+        dns_or_tls = _detect_dns_or_tls_reason(exc)
+        if dns_or_tls is not None:
+            return ("dead", dns_or_tls, False)
+        return ("dead", "connect", True)
+
+    if isinstance(exc, httpx.RequestError):
+        return ("error", "request_error", True)
+
+    return ("error", "request_error", True)
+
+
+def _retry_backoff_seconds(attempt: int) -> float:
+    return min(0.5 * (2 ** attempt), 4.0)
+
+
+def should_emit_checkpoint(
+    completed: int,
+    last_completed: int,
+    now: float,
+    last_time: float,
+    count_interval: int = 250,
+    time_interval: float = 10.0,
+) -> bool:
+    return (
+        (completed - last_completed) >= count_interval
+        or (now - last_time) >= time_interval
+    )
+
+
+async def check_one_source_url(
+    client: httpx.AsyncClient,
+    candidate_row: dict,
+    timeout: int,
+    retries: int,
+) -> dict | None:
+    source_url = candidate_row.get("source_url") or ""
+
+    for attempt in range(retries + 1):
+        try:
+            resp = await client.get(
+                source_url,
+                follow_redirects=True,
+                timeout=timeout,
+            )
+        except httpx.RequestError as exc:
+            classification, reason, retriable = classify_request_exception(exc)
+        else:
+            classification, reason, retriable = classify_status_code(resp.status_code)
+
+        if classification is None:
+            return None
+
+        if not retriable or attempt >= retries:
+            return {**candidate_row, "classification": classification, "reason": reason}
+
+        await asyncio.sleep(_retry_backoff_seconds(attempt))
+
+    return None
+
+
+async def check_links_async(
+    candidate_rows: list[dict],
+    concurrency: int,
+    timeout: int,
+    retries: int,
+    checkpoint_cb: Callable[[dict], None] | None = None,
+    count_interval: int = 250,
+    time_interval: float = 10.0,
+) -> list[dict]:
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    safe_count_interval = max(1, int(count_interval))
+    safe_time_interval = max(0.001, float(time_interval))
+
+    def _emit_checkpoint(payload: dict) -> None:
+        if not checkpoint_cb:
+            return
+        try:
+            checkpoint_cb(payload)
+        except Exception:  # noqa: BLE001 - checkpoint callback must not abort checks.
+            log.warning("Checkpoint callback failed; continuing.")
+            log.debug("Checkpoint callback exception details", exc_info=True)
+
+    async def _run_one(client: httpx.AsyncClient, row: dict) -> dict | None:
+        async with semaphore:
+            return await check_one_source_url(
+                client,
+                row,
+                timeout=timeout,
+                retries=retries,
+            )
+
+    if not candidate_rows:
+        return []
+
+    total = len(candidate_rows)
+    completed = 0
+    last_completed = 0
+    last_time = time.monotonic()
+    failure_rows: list[dict] = []
+
+    async with httpx.AsyncClient() as client:
+        tasks = [asyncio.create_task(_run_one(client, row)) for row in candidate_rows]
+        for finished in asyncio.as_completed(tasks):
+            result = await finished
+            completed += 1
+            if result is not None:
+                failure_rows.append(result)
+
+            now = time.monotonic()
+            if checkpoint_cb and should_emit_checkpoint(
+                completed=completed,
+                last_completed=last_completed,
+                now=now,
+                last_time=last_time,
+                count_interval=safe_count_interval,
+                time_interval=safe_time_interval,
+            ):
+                _emit_checkpoint({
+                    "completed": completed,
+                    "total": total,
+                    "failures": len(failure_rows),
+                    "timestamp": now,
+                })
+                last_completed = completed
+                last_time = now
+
+    if checkpoint_cb and completed == total:
+        now = time.monotonic()
+        if completed != last_completed:
+            _emit_checkpoint({
+                "completed": completed,
+                "total": total,
+                "failures": len(failure_rows),
+                "timestamp": now,
+            })
+
+    return failure_rows
+
+
+
+def delete_document(token: str, doc_id: str) -> bool:
+    headers = {"Authorization": f"Token {token}"}
+    with httpx.Client(headers=headers, timeout=30) as client:
+        log.debug("DELETE /documents/%s/", doc_id)
+        while True:
+            resp = client.delete(f"{BASE_URL}/delete/{doc_id}/")
+            if resp.status_code != 429:
+                break
+            wait = int(resp.headers.get("retry-after", "60"))
+            log.debug("Rate limited; retrying in %ds", wait)
+            time.sleep(wait)
+        if resp.status_code == 404:
+            log.warning("Document %s not found (already deleted?)", doc_id)
+            return False
+        resp.raise_for_status()
+        return True
+
+
+def doc_label(doc: dict) -> str:
+    title = (doc.get("title") or "Untitled")[:50].replace("|", "·")
+    loc = doc.get("location", "?")
+    highlights = doc.get("num_highlights", 0)
+    tags = len(doc.get("tags") or {})
+    created = (doc.get("created_at") or "")[:10]
+    score = score_doc(doc)
+    return f"{title} | {loc} | {highlights}h | {tags}t | {created} | score={score}"
+
+
+def show_dup_group(url: str, docs: list[dict], keeper: dict | None) -> None:
+    console.print(f"\n[bold]Duplicate:[/bold] {url}")
+    for doc in docs:
+        marker = "[green]KEEP[/green]" if keeper and doc["id"] == keeper["id"] else "[red] DEL[/red]"
+        console.print(f"  {marker}  {doc_label(doc)}")
+
+
+def deletion_table(to_delete: list[dict]) -> Table:
+    table = Table(title=f"Planned deletions ({len(to_delete)} documents)")
+    table.add_column("Title", style="cyan", max_width=40)
+    table.add_column("URL", max_width=45)
+    table.add_column("Location")
+    table.add_column("H", justify="right")
+    table.add_column("Tags", justify="right")
+    table.add_column("Created")
+    for doc in to_delete:
+        table.add_row(
+            (doc.get("title") or "")[:40],
+            (doc.get("source_url") or "")[:45],
+            doc.get("location", ""),
+            str(doc.get("num_highlights", "?")),
+            str(len(doc.get("tags") or {})),
+            (doc.get("created_at") or "")[:10],
+        )
+    return table
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def format_age(seconds: float) -> str:
+    total = max(0, int(seconds))
+    if total < 60:
+        return f"{total}s"
+    if total < 3600:
+        minutes, rem = divmod(total, 60)
+        return f"{minutes}m {rem}s"
+    if total < 86400:
+        hours, rem = divmod(total, 3600)
+        minutes = rem // 60
+        return f"{hours}h {minutes}m"
+    days, rem = divmod(total, 86400)
+    hours = rem // 3600
+    return f"{days}d {hours}h"
+
+
+def stats_table(
+    docs: list[dict],
+    meta: dict,
+    now: datetime | None = None,
+    all_locations: bool = False,
+    title: str = "Reader Document Stats",
+) -> Table:
+    table = Table(title=title)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+
+    table.add_row("Total docs", str(len(docs)))
+
+    now_dt = now or datetime.now(timezone.utc)
+    last_refresh = parse_iso_datetime(meta.get("last_refresh"))
+    if last_refresh is None:
+        age = "unknown"
+    else:
+        age = format_age((now_dt - last_refresh).total_seconds())
+    table.add_row("Cache age", age)
+
+    location_counts: dict[str, int] = {}
+    for doc in docs:
+        location = doc.get("location")
+        if location in LOCATION_PRIORITY:
+            location_counts[location] = location_counts.get(location, 0) + 1
+
+    for key, label in STATS_LOCATION_ROWS:
+        count = location_counts.get(key, 0)
+        if count > 0 or all_locations:
+            table.add_row(label, str(count))
+
+    return table
+
+
+def run_dedupe(args: argparse.Namespace) -> None:
+    setup_logging(args.verbose, args.quiet)
+    token = resolve_token()
+
+    refresh_cache(token, full=args.refresh, max_age=args.max_age)
+
+    docs = load_cache()
+    log.info("Loaded %d cached documents", len(docs))
+
+    groups = group_by_url(docs)
+    if not groups:
+        console.print("[green]No duplicate URLs found.[/green]")
+        return
+    log.info("Found %d duplicate URL groups", len(groups))
+
+    # Highlights are Reader docs with parent_id pointing to their source document.
+    # Count them from the cache — no extra API calls needed.
+    highlight_counts = compute_child_counts(docs)
+
+    candidates = [d for grp in groups.values() for d in grp]
+    for doc in candidates:
+        doc["num_highlights"] = highlight_counts.get(doc["id"], 0)
+
+    to_delete: list[dict] = []
+
+    for url, grp in groups.items():
+        keeper, deletions, is_tie = pick_keeper(grp)
+
+        if is_tie:
+            show_dup_group(url, grp, None)
+            choices = [questionary.Choice(title=doc_label(d), value=d) for d in grp]
+            choices.append(questionary.Choice(title="[Skip this group]", value=None))
+            keeper = questionary.select(
+                "Which document should be kept?", choices=choices
+            ).ask()
+            if keeper is None:
+                log.info("Skipped group: %s", url)
+                continue
+            deletions = [d for d in grp if d["id"] != keeper["id"]]
+        else:
+            show_dup_group(url, grp, keeper)
+
+        to_delete.extend(deletions)
+
+    if not to_delete:
+        console.print("[green]No documents to delete.[/green]")
+        return
+
+    console.print(deletion_table(to_delete))
+
+    if args.dry_run:
+        console.print("[yellow]Dry run — nothing deleted.[/yellow]")
+        return
+
+    if not questionary.confirm(
+        f"Delete {len(to_delete)} document(s)?", default=False
+    ).ask():
+        console.print("Aborted.")
+        return
+
+    deleted = delete_documents(token, to_delete)
+    console.print(f"[green]Deleted {deleted}/{len(to_delete)} documents.[/green]")
+
+
+def run_stats(args: argparse.Namespace) -> None:
+    setup_logging(args.verbose, args.quiet)
+    token = resolve_token()
+
+    if not args.no_refresh:
+        refresh_cache(token, full=args.refresh, max_age=args.max_age)
+
+    meta = load_meta()
+    docs = load_cache()
+    title = "Reader Cache Stats" if args.no_refresh else "Reader Document Stats"
+    console.print(stats_table(docs, meta, all_locations=args.all_locations, title=title))
+
+
+def choose_output_format(requested: str | None) -> str:
+    if requested in ("plain", "rich", "csv"):
+        return requested
+    is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+    return "rich" if is_tty else "plain"
+
+
+def choose_progress_output_format() -> str:
+    is_tty = bool(getattr(sys.stderr, "isatty", lambda: False)())
+    return "rich" if is_tty else "plain"
+
+
+def delete_documents(
+    token: str,
+    to_delete: list[dict],
+    count_interval: int = 250,
+    time_interval: float = 10.0,
+) -> int:
+    if not to_delete:
+        return 0
+
+    total = len(to_delete)
+    deleted = 0
+    completed = 0
+    last_completed = 0
+    last_time = time.monotonic()
+    safe_count_interval = max(1, int(count_interval))
+    safe_time_interval = max(0.001, float(time_interval))
+    progress_format = choose_progress_output_format()
+
+    def _delete_one(doc: dict) -> None:
+        nonlocal deleted
+        ok = delete_document(token, doc["id"])
+        (docs_dir() / f"{doc['id']}.json").unlink(missing_ok=True)
+        if ok:
+            deleted += 1
+
+    if progress_format == "rich":
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=log_console,
+            transient=True,
+        ) as progress:
+            task_id = progress.add_task("Deleting duplicates…", total=total)
+            for doc in to_delete:
+                completed += 1
+                _delete_one(doc)
+                progress.update(
+                    task_id,
+                    completed=completed,
+                    description=f"Deleting duplicates… ({deleted}/{total} deleted)",
+                )
+    else:
+        for doc in to_delete:
+            completed += 1
+            _delete_one(doc)
+            now = time.monotonic()
+            if should_emit_checkpoint(
+                completed=completed,
+                last_completed=last_completed,
+                now=now,
+                last_time=last_time,
+                count_interval=safe_count_interval,
+                time_interval=safe_time_interval,
+            ):
+                sys.stderr.write(
+                    f"checkpoint completed={completed}/{total} deleted={deleted}\n"
+                )
+                sys.stderr.flush()
+                last_completed = completed
+                last_time = now
+
+        if completed != last_completed:
+            sys.stderr.write(
+                f"checkpoint completed={completed}/{total} deleted={deleted}\n"
+            )
+            sys.stderr.flush()
+
+    return deleted
+
+
+def render_check_links_results(rows: list[dict], fmt: str) -> None:
+    if fmt == "csv":
+        writer = csv.DictWriter(sys.stdout, fieldnames=list(CHECK_LINKS_RESULT_COLUMNS))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in CHECK_LINKS_RESULT_COLUMNS})
+        return
+
+    if fmt == "plain":
+        if not rows:
+            console.print("No dead or error source_url links found.")
+            return
+        for row in rows:
+            values = [str(row.get(key, "")) for key in CHECK_LINKS_RESULT_COLUMNS]
+            print("\t".join(values))
+        return
+
+    table = Table(title=f"Check Links Failures ({len(rows)})")
+    table.add_column("ID")
+    table.add_column("URL", overflow="fold")
+    table.add_column("Source URL", overflow="fold")
+    table.add_column("Tags", justify="right")
+    table.add_column("Highlights", justify="right")
+    table.add_column("Class")
+    table.add_column("Reason")
+    for row in rows:
+        table.add_row(
+            str(row.get("id", "")),
+            str(row.get("url", "")),
+            str(row.get("source_url", "")),
+            str(row.get("tag_count", "")),
+            str(row.get("highlight_count", "")),
+            str(row.get("classification", "")),
+            str(row.get("reason", "")),
+        )
+    console.print(table)
+
+
+def run_check_links(args: argparse.Namespace) -> None:
+    setup_logging(args.verbose, args.quiet)
+    token = resolve_token()
+
+    if not args.no_refresh:
+        refresh_cache(token, full=args.refresh, max_age=args.max_age)
+
+    docs = load_cache()
+    candidate_rows = collect_check_link_candidates(docs)
+    fmt = choose_output_format(args.format)
+
+    if fmt == "rich":
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=log_console,
+            transient=True,
+        ) as progress:
+            task_id = progress.add_task("Checking links…", total=len(candidate_rows))
+
+            def _checkpoint(payload: dict) -> None:
+                desc = (
+                    f"Checking links… ({payload['failures']} dead/error)"
+                    if payload["failures"]
+                    else "Checking links…"
+                )
+                progress.update(task_id, completed=payload["completed"], description=desc)
+
+            failures = asyncio.run(
+                check_links_async(
+                    candidate_rows,
+                    concurrency=args.concurrency,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    checkpoint_cb=_checkpoint,
+                    time_interval=0.5,
+                )
+            )
+    else:
+        def _checkpoint(payload: dict) -> None:
+            sys.stderr.write(
+                f"checkpoint completed={payload['completed']}/{payload['total']} "
+                f"failures={payload['failures']}\n"
+            )
+            sys.stderr.flush()
+
+        failures = asyncio.run(
+            check_links_async(
+                candidate_rows,
+                concurrency=args.concurrency,
+                timeout=args.timeout,
+                retries=args.retries,
+                checkpoint_cb=_checkpoint,
+            )
+        )
+
+    render_check_links_results(failures, fmt)
+    if failures:
+        raise SystemExit(1)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    if args.command == "dedupe":
+        run_dedupe(args)
+        return
+    if args.command == "stats":
+        run_stats(args)
+        return
+    if args.command == "check-links":
+        run_check_links(args)
+        return
+    raise AssertionError(f"Unhandled command: {args.command}")
+
+
+if __name__ == "__main__":
+    main()
