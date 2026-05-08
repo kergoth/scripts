@@ -259,10 +259,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args_in in (["-h"], ["--help"]):
         return parser.parse_args(args_in)
 
-    # Backward compatibility: keep option-only invocations working.
-    if not args_in:
-        args_in = ["dedupe"]
-    elif args_in[0].startswith("-"):
+    if args_in[0].startswith("-"):
         commands = {"dedupe", "stats", "check-links", "tag-check-links"}
         command_index = next(
             (i for i, arg in enumerate(args_in) if arg in commands),
