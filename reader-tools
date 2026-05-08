@@ -101,7 +101,7 @@ def setup_logging(verbose: int, quiet: int) -> None:
 
 
 def add_cache_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--refresh", action="store_true", help="Force full cache re-fetch")
+    parser.add_argument("--refresh", action="store_true", help="Force full cache re-fetch (required to detect documents deleted from Reader)")
     parser.add_argument(
         "--max-age", type=int, default=3600, metavar="SECONDS",
         help="Max cache age before refresh, in seconds (default: 3600)",
@@ -365,6 +365,9 @@ def refresh_cache(token: str, full: bool = False, max_age: int = 3600) -> None:
             log.info("Cache is fresh (%.0fs old), skipping refresh", age)
             return
         log.info("Incremental refresh (cache %.0fs old)", age)
+        # Incremental refresh cannot detect deletions: the API has no tombstones
+        # and omits deleted documents from all responses. Only a full refresh
+        # (--refresh) purges deleted documents from the local cache.
         d.mkdir(parents=True, exist_ok=True)
         count = 0
         page = 0
