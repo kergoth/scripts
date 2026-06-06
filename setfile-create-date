@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+import ctypes
+import errno
+import os
+import sys
+
+ATTR_BIT_MAP_COUNT = 5
+ATTR_CMN_CRTIME = 0x00000200
+
+class AttrList(ctypes.Structure):
+    _fields_ = [
+        ("bitmapcount", ctypes.c_ushort),
+        ("reserved", ctypes.c_uint16),
+        ("commonattr", ctypes.c_uint32),
+        ("volattr", ctypes.c_uint32),
+        ("dirattr", ctypes.c_uint32),
+        ("fileattr", ctypes.c_uint32),
+        ("forkattr", ctypes.c_uint32),
+    ]
+
+class Timespec(ctypes.Structure):
+    _fields_ = [
+        ("tv_sec", ctypes.c_long),
+        ("tv_nsec", ctypes.c_long),
+    ]
+
+libc = ctypes.CDLL("libc.dylib", use_errno=True)
+
+libc.setattrlist.argtypes = [
+    ctypes.c_char_p,
+    ctypes.POINTER(AttrList),
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+    ctypes.c_ulong,
+]
+libc.setattrlist.restype = ctypes.c_int
+
+def set_creation_time(path: str, seconds: int) -> None:
+    attrs = AttrList()
+    attrs.bitmapcount = ATTR_BIT_MAP_COUNT
+    attrs.commonattr = ATTR_CMN_CRTIME
+
+    ts = Timespec(seconds, 0)
+
+    ret = libc.setattrlist(
+        os.fsencode(path),
+        ctypes.byref(attrs),
+        ctypes.byref(ts),
+        ctypes.sizeof(ts),
+        0,
+    )
+
+    if ret != 0:
+        e = ctypes.get_errno()
+        raise OSError(e, os.strerror(e), path)
+
+def main() -> int:
+    if len(sys.argv) < 3:
+        print(f"usage: {sys.argv[0]} DATE_SECONDS PATH [PATH...]", file=sys.stderr)
+        return 2
+
+    try:
+        seconds = int(sys.argv[1])
+    except ValueError:
+        print(f"invalid DATE_SECONDS: {sys.argv[1]!r}", file=sys.stderr)
+        return 2
+
+    failed = False
+    for path in sys.argv[2:]:
+        try:
+            set_creation_time(path, seconds)
+        except OSError as e:
+            print(f"{e.filename}: {e.strerror}", file=sys.stderr)
+            failed = True
+
+    return 1 if failed else 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

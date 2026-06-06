@@ -51,13 +51,13 @@ update_dates() {
                     # Skip if the new date is newer than the existing
                     continue
                 fi
-                setfile_date=$(/bin/date -j -f "$date_format" "$date_create" "+%m/%d/%Y %H:%M:%S")
                 if [ $verbose -gt 0 ]; then
                     create_date=$(/bin/date -j -f "$date_format" "$existing_create" "+%Y-%m-%dT%H:%M:%S")
-                    echo >&2 "$filepath: creation date $create_date -> $setfile_date"
+                    create_target=$(/bin/date -j -f "$date_format" "$date_create" "+%Y-%m-%dT%H:%M:%S")
+                    echo >&2 "$filepath: creation date $create_date -> $create_target"
                 fi
 
-                ${dry_run:+echo "> "}SetFile -d "$setfile_date" "$filepath"
+                ${dry_run:+echo "> "}setfile-create-date "$date_create" "$filepath"
         fi
     done
 }
@@ -115,6 +115,9 @@ if [ -z "$date_modif" ] && [ -z "$date_create" ]; then
     # Nothing to do
     exit 0
 fi
+
+scriptdir=$(cd "$(dirname "$0")" && pwd -P)
+PATH="$scriptdir:$PATH"
 
 ret=0
 for arg; do
