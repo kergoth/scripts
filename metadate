@@ -205,7 +205,7 @@ update_dates() {
 
         if [ $# -eq 0 ]; then
             # Nothing to set
-            return
+            continue
         fi
 
         # shellcheck disable=SC2034
@@ -217,7 +217,7 @@ update_dates() {
             printf "> "
             printcmd setfiledate -o ${dry_run:+-n} "$@" "$filepath"
         fi
-        setfiledate ${only_older:+o} ${dry_run:+-n} "$@" "$filepath" || {
+        setfiledate ${only_older:+-o} ${dry_run:+-n} "$@" "$filepath" || {
             local fret=$?
             if [ $continue -eq 0 ]; then
                 return $fret
@@ -365,7 +365,7 @@ ardate() {
 }
 
 lsardate() {
-    local ret=$?
+    local ret=0
     lsar -nr -j "$1" >"$tmpfile" || ret=$?
     if [ $ret -eq 1 ]; then
         if ! jq --exit-status '.lsarContents | if . == [] then false else . or false end' <"$tmpfile" >/dev/null; then
