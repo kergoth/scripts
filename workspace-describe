@@ -1,0 +1,3 @@
+#!/bin/sh
+# Cache Jira issue summaries to each workspace's .description file.
+exec workspace-list --jira --cache-desc >/dev/null

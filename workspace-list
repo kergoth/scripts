@@ -1,0 +1,534 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "rich",
+# ]
+# ///
+
+"""
+Alternative Python version using rich for beautiful table formatting.
+Self-contained with uv dependency management.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+from rich.console import Console
+from rich.table import Table
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="List workspace projects with their status"
+    )
+    parser.add_argument(
+        "--date", "-d",
+        choices=["relative", "iso", "short", "unix"],
+        default="relative",
+        help="Date format (default: relative)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit a JSON array of workspace records instead of the table.",
+    )
+    parser.add_argument(
+        "--no-workspace",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,  # hidden; for use once Workspace projects are wound down
+    )
+    parser.add_argument(
+        "--jira",
+        action="store_true",
+        default=False,
+        help="Enrich entries with Jira issue type, status, and summary.",
+    )
+    parser.add_argument(
+        "--cache-desc",
+        action="store_true",
+        default=False,
+        help="With --jira, write fetched Jira summaries to each project's .description file.",
+    )
+    args = parser.parse_args()
+    if args.cache_desc and not args.jira:
+        parser.error("--cache-desc requires --jira")
+    return args
+
+# Regex to extract a Jira issue key (e.g., "RD-12229" from "RD-12229-yocto")
+JIRA_ID_PATTERN = re.compile(r"^([A-Z]+-\d+)", re.IGNORECASE)
+_RICH_TAG = re.compile(r"\[/?[a-zA-Z][^\]]*\]")
+_SOURCE_BADGE = {"worktree": "wt", "workspace": "ws"}
+
+
+def get_jira_fields(project_path):
+    """Get Jira fields (type, status, summary) when the directory name starts with KEY-123."""
+    project_name = project_path.name
+
+    match = JIRA_ID_PATTERN.match(project_name)
+    if not match:
+        return None, None, None
+
+    jira_id = match.group(1)
+
+    try:
+        result = subprocess.run(
+            ["jira", "issue", "view", "--raw", jira_id],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            fields = data.get("fields", {})
+            issue_type = fields.get("issuetype", {}).get("name", "") or None
+            status = fields.get("status", {}).get("name", "") or None
+            summary = fields.get("summary", "") or None
+            return issue_type, status, summary
+    except (subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
+        pass
+
+    return None, None, None
+
+
+def get_description(project_path):
+    """Get description from .description file."""
+    desc_file = project_path / ".description"
+    if desc_file.exists():
+        return desc_file.read_text().strip()
+    return None
+
+
+def git_checked_out_branch(project_path: Path) -> str | None:
+    """Return the checked-out branch for a git worktree, or None if not a repo."""
+    git_entry = project_path / ".git"
+    if not git_entry.exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        branch = result.stdout.strip()
+        return branch or None
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return None
+
+
+def cache_jira_description(project_path: Path, summary: str | None) -> None:
+    """Write a Jira summary to .description, overwriting any existing content."""
+    if not summary:
+        return
+    if not project_path.is_dir():
+        return
+    text = _RICH_TAG.sub("", summary).strip()
+    if not text:
+        return
+    (project_path / ".description").write_text(f"{text}\n", encoding="utf-8")
+
+
+def get_devpod_list():
+    """Call devpod list once; return last_used timestamps and localFolder paths."""
+    workspace_ids: set[str] = set()
+    last_used: dict[str, str] = {}
+    local_folders: dict[str, str] = {}
+
+    try:
+        result = subprocess.run(
+            ["devpod", "list", "--output", "json"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode == 0:
+            for workspace in json.loads(result.stdout):
+                workspace_id = workspace.get("id", "")
+                if not workspace_id:
+                    continue
+                wid = workspace_id.lower()
+                workspace_ids.add(wid)
+                ts = workspace.get("lastUsed", "")
+                if ts:
+                    last_used[wid] = ts
+                local_folder = workspace.get("source", {}).get("localFolder")
+                if local_folder:
+                    local_folders[wid] = local_folder
+    except (subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
+        pass
+
+    return workspace_ids, last_used, local_folders
+
+
+def build_devpod_path_index(local_folders: dict[str, str]) -> dict[str, str]:
+    """Map resolved localFolder paths to workspace IDs (lowercase)."""
+    by_path: dict[str, str] = {}
+    for wid, folder in local_folders.items():
+        if not folder:
+            continue
+        try:
+            resolved = str(Path(folder).expanduser().resolve())
+        except OSError:
+            continue
+        by_path[resolved] = wid
+    return by_path
+
+
+def devpod_id_at_path(project_path: Path, devpod_by_path: dict[str, str]) -> str | None:
+    """Return the devpod workspace ID registered to this exact path, if any."""
+    try:
+        return devpod_by_path.get(str(project_path.resolve()))
+    except OSError:
+        return None
+
+
+def devpod_id_for_workspace(
+    project_path: Path,
+    name: str,
+    *,
+    workspace_ids: set[str],
+    devpod_by_path: dict[str, str],
+) -> str | None:
+    """Return a devpod ID for a WORKSPACE_DIR project (path match, then dir name)."""
+    path_id = devpod_id_at_path(project_path, devpod_by_path)
+    if path_id:
+        return path_id
+    fid = name.lower()
+    if fid in workspace_ids:
+        return fid
+    return None
+
+
+def devpod_last_used_ts(
+    devpod_id: str | None,
+    devpod_last_used: dict[str, str],
+    fallback: datetime | None,
+) -> datetime | None:
+    if devpod_id:
+        ts = parse_iso_timestamp(devpod_last_used.get(devpod_id, ""))
+        if ts:
+            return ts
+    return fallback
+
+
+def format_time_ago(timestamp):
+    """Convert datetime to human-readable 'time ago' format."""
+    now = datetime.now(timezone.utc)
+    diff = now - timestamp
+
+    seconds = diff.total_seconds()
+
+    if seconds < 60:
+        return "just now"
+    elif seconds < 3600:
+        minutes = int(seconds / 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    elif seconds < 86400:
+        hours = int(seconds / 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    elif seconds < 604800:
+        days = int(seconds / 86400)
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    elif seconds < 2592000:
+        weeks = int(seconds / 604800)
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    elif seconds < 31536000:
+        months = int(seconds / 2592000)
+        return f"{months} month{'s' if months != 1 else ''} ago"
+    else:
+        years = int(seconds / 31536000)
+        return f"{years} year{'s' if years != 1 else ''} ago"
+
+
+def format_timestamp(timestamp, date_format):
+    """Format datetime according to the specified date format.
+
+    Args:
+        timestamp: datetime object (timezone-aware)
+        date_format: One of "relative", "iso", "short", "unix"
+
+    Returns:
+        Formatted timestamp string
+    """
+    if timestamp is None:
+        return "Missing" if date_format == "relative" else "-"
+
+    if date_format == "relative":
+        return format_time_ago(timestamp)
+    elif date_format == "iso":
+        return timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    elif date_format == "short":
+        return timestamp.astimezone().strftime("%Y-%m-%d")
+    elif date_format == "unix":
+        return str(int(timestamp.timestamp()))
+    else:
+        return format_time_ago(timestamp)
+
+
+def parse_iso_timestamp(timestamp_str):
+    """Parse ISO 8601 timestamp string to datetime object."""
+    if not timestamp_str:
+        return None
+    try:
+        return datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
+def parse_mtime(mtime):
+    """Convert mtime (seconds since epoch) to timezone-aware datetime."""
+    return datetime.fromtimestamp(mtime, tz=timezone.utc)
+
+
+def parse_worktree_list(output: str) -> list[dict]:
+    """Parse git worktree list --porcelain output into a list of dicts.
+
+    Each dict has 'path' (str) and 'branch' (str, without refs/heads/ prefix).
+    Detached HEAD worktrees are omitted.
+    """
+    worktrees = []
+    current: dict = {}
+    for line in output.splitlines():
+        if line.startswith("worktree "):
+            current = {"path": line[len("worktree "):]}
+        elif line.startswith("branch "):
+            ref = line[len("branch "):]
+            # str.removeprefix requires Python 3.9 (ensured by requires-python in Task 1)
+            current["branch"] = ref.removeprefix("refs/heads/")
+        elif line == "" and current:
+            if "branch" in current:
+                worktrees.append(current)
+            current = {}
+    if current and "branch" in current:
+        worktrees.append(current)
+    return worktrees
+
+
+def ghq_root() -> Path:
+    return Path(os.environ.get("GHQ_ROOT", Path.home() / "Repos")).expanduser()
+
+
+def workspace_projects_dir() -> Path:
+    return Path(os.environ.get("WORKSPACE_DIR", Path.home() / "Workspace")).expanduser()
+
+
+def collect_worktree_entries(ghq_root_dir: Path) -> list[dict]:
+    """Return raw entries for linked worktrees under ghq-managed clones.
+
+    Scans every git repository under ghq_root_dir (each directory named .git).
+    The main worktree of each repo is excluded.
+    """
+    entries = []
+    if not ghq_root_dir.is_dir():
+        return entries
+    for git_dir in sorted(ghq_root_dir.rglob(".git")):
+        if not git_dir.is_dir():
+            continue
+        repo_path = git_dir.parent
+        repo_name = repo_path.name
+        main_path = str(repo_path.resolve())
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo_path), "worktree", "list", "--porcelain"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                continue
+        except (subprocess.SubprocessError, FileNotFoundError):
+            continue
+        for wt in parse_worktree_list(result.stdout):
+            if wt["path"] == main_path:
+                continue
+            wt_path = Path(wt["path"])
+            match = JIRA_ID_PATTERN.match(wt["branch"])
+            entries.append({
+                "path": wt_path,
+                "branch": wt["branch"],
+                "repo": repo_name,
+                "source": "worktree",
+                "issue_id": match.group(1) if match else None,
+            })
+    return entries
+
+
+def collect_workspace_entries(workspace_dir: Path) -> list[dict]:
+    """Return raw entries for each project directory in workspace_dir."""
+    entries = []
+    if not workspace_dir.is_dir():
+        return entries
+    for project_path in sorted(workspace_dir.iterdir()):
+        if not project_path.is_dir():
+            continue
+        name = project_path.name
+        if name.startswith(".") or name.startswith("_"):
+            continue
+        match = JIRA_ID_PATTERN.match(name)
+        entries.append({
+            "path": project_path,
+            "name": name,
+            "repo": None,
+            "source": "workspace",
+            "issue_id": match.group(1) if match else None,
+        })
+    return entries
+
+
+def records_to_json(projects: list[dict]) -> str:
+    output = []
+    for r in projects:
+        last_used = r.get("last_used_ts")
+        output.append({
+            "path": r.get("path", ""),
+            "name": r.get("name", ""),
+            "branch": r.get("branch", ""),
+            "repo": r.get("repo"),
+            "source": r.get("source", "workspace"),
+            "issue_id": r.get("issue_id"),
+            "issue_type": r.get("type", ""),
+            "status": r.get("status", ""),
+            "summary": _RICH_TAG.sub("", r.get("summary", "")),
+            "last_used": last_used.isoformat() if last_used else None,
+        })
+    return json.dumps(output, indent=2)
+
+
+def main():
+    args = parse_args()
+    date_format = args.date
+
+    console = Console()
+    projects_root = workspace_projects_dir()
+
+    # Phase 1: devpod list for path-indexed lastUsed only (no status calls)
+    workspace_ids, devpod_last_used, devpod_local_folders = get_devpod_list()
+    devpod_by_path = build_devpod_path_index(devpod_local_folders)
+
+    # Phase 2: collect entries
+    workspace_entries = collect_workspace_entries(projects_root) if not args.no_workspace else []
+    worktree_entries = collect_worktree_entries(ghq_root())
+
+    projects = []
+    for entry in workspace_entries:
+        project_path = entry["path"]
+        project_name = entry["name"]
+
+        mtime_ts = parse_mtime(project_path.stat().st_mtime)
+
+        if args.jira:
+            issue_type, status, jira_summary = get_jira_fields(project_path)
+            if args.cache_desc:
+                cache_jira_description(project_path, jira_summary)
+        else:
+            issue_type, status, jira_summary = "", "", None
+
+        desc = get_description(project_path)
+        summary = jira_summary or desc or ""
+
+        devpod_id = devpod_id_for_workspace(
+            project_path,
+            project_name,
+            workspace_ids=workspace_ids,
+            devpod_by_path=devpod_by_path,
+        )
+        last_used_ts = devpod_last_used_ts(devpod_id, devpod_last_used, mtime_ts)
+
+        branch = git_checked_out_branch(project_path)
+
+        projects.append({
+            "path": str(project_path),
+            "repo": None,
+            "source": "workspace",
+            "issue_id": entry["issue_id"],
+            "name": project_name,
+            "last_used_ts": last_used_ts,
+            "type": issue_type or "",
+            "status": status or "",
+            "summary": summary,
+        })
+        if branch:
+            projects[-1]["branch"] = branch
+
+    for entry in worktree_entries:
+        wt_path = entry["path"]
+        branch = entry["branch"]
+        repo_name = entry["repo"]
+
+        mtime_ts = parse_mtime(wt_path.stat().st_mtime) if wt_path.exists() else None
+
+        if args.jira:
+            issue_type, status, jira_summary = get_jira_fields(wt_path)
+            if args.cache_desc:
+                cache_jira_description(wt_path, jira_summary)
+        else:
+            issue_type, status, jira_summary = "", "", None
+        desc = get_description(wt_path)
+        summary = jira_summary or desc or ""
+
+        # Only a path-specific devpod lastUsed is meaningful for worktrees.
+        devpod_id = devpod_id_at_path(wt_path, devpod_by_path)
+        last_used_ts = devpod_last_used_ts(devpod_id, devpod_last_used, mtime_ts)
+
+        projects.append({
+            "path": str(wt_path),
+            "branch": branch,
+            "repo": repo_name,
+            "source": "worktree",
+            "issue_id": entry["issue_id"],
+            "name": wt_path.name,
+            "last_used_ts": last_used_ts,
+            "type": issue_type or "",
+            "status": status or "",
+            "summary": summary,
+        })
+
+    def sort_key(p):
+        last_used_ts = p.get("last_used_ts")
+        if last_used_ts is not None:
+            return (0, -last_used_ts.timestamp())
+        return (1, 0)
+
+    projects.sort(key=sort_key)
+
+    if args.json:
+        print(records_to_json(projects))
+        return
+
+    # Create table
+    table = Table(show_header=True, header_style="bold cyan", box=None)
+    table.add_column("Project", style="green", no_wrap=False)
+    table.add_column("Repo", style="cyan", no_wrap=True)
+    table.add_column("Src", style="dim", no_wrap=True)
+    table.add_column("Last Used", style="yellow", justify="left")
+    if args.jira:
+        table.add_column("Issue Type", style="blue", no_wrap=False)
+        table.add_column("Status", style="magenta", no_wrap=False)
+    table.add_column("Summary", style="white", no_wrap=False)
+
+    for project in projects:
+        row = [
+            project["name"],
+            project.get("repo") or "",
+            _SOURCE_BADGE.get(project.get("source", "workspace"), "?"),
+            format_timestamp(project["last_used_ts"], date_format),
+        ]
+        if args.jira:
+            row += [project["type"], project["status"]]
+        row += [project["summary"]]
+        table.add_row(*row)
+
+    console.print(table)
+
+
+if __name__ == "__main__":
+    main()

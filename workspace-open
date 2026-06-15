@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Usage: workspace-open [-e] [-j] [-n] [-h] [QUERY]
+#
+# Select a workspace interactively and open it in $WORKSPACE_EDITOR (default: zed).
+# Uses workspace-pick for selection.
+#
+# Options:
+#     -e          Exact match: prefix the fzf query with ' (non-fuzzy)
+#     -j          Enrich entries with Jira metadata (slower; passed to workspace-pick)
+#     -n          Print the selected path instead of opening the editor
+#     -h          Show this help message
+
+set -euo pipefail
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+dry_run=0
+jira=0
+exact=0
+query=
+
+process_arguments() {
+    while getopts ':ejnh' opt; do
+        case $opt in
+            e) exact=1 ;;
+            j) jira=1 ;;
+            n) dry_run=1 ;;
+            h) show_help; exit 0 ;;
+            \?)
+                printf 'error: unknown option: -%s\n' "$OPTARG" >&2
+                show_help >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    if [ $# -gt 0 ]; then
+        query=$1
+    fi
+}
+
+main() {
+    process_arguments "$@"
+
+    pick_args=()
+    [ "$exact" -eq 1 ] && pick_args+=(-e)
+    [ "$jira" -eq 1 ] && pick_args+=(-j)
+    [ -n "$query" ] && pick_args+=("$query")
+
+    path=$(workspace-pick "${pick_args[@]}") || exit $?
+    if [ -z "$path" ]; then
+        exit 0
+    fi
+
+    if [ "$dry_run" -eq 1 ]; then
+        printf '%s\n' "$path"
+    else
+        ${WORKSPACE_EDITOR:-zed} "$path"
+    fi
+}
+
+main "$@"

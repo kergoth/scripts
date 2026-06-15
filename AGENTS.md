@@ -262,6 +262,12 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **install-decky-plugin** [bash, -h]: Install Decky Loader plugin from a tarball/URL.
 - **scrappy-community-convert** [bash, none]: Convert Scrappy templates to muxzip format.
 
+## Workspace projects (`workspace-*`)
+- **workspace-list** [python (uv), argparse]: List `$WORKSPACE_DIR` projects (default `~/Workspace`) and ghq worktrees (`$GHQ_ROOT`); optional Jira via `jira` CLI.
+- **workspace-pick** [bash, -h]: fzf-select a workspace and print its path to stdout.
+- **workspace-open** [bash, -h]: fzf-select a workspace and open it in `$WORKSPACE_EDITOR` (default: zed).
+- **workspace-describe** [sh, none]: Cache Jira summaries to `.description` files via `workspace-list --jira --cache-desc`.
+
 ## DevPod / containers (`devpod-*`, `cached-retool`, `distrobox-create-chimera`)
 - **cached-retool** [python (uv), --help]: Caching wrapper for retool that hashes inputs.
 - **devpod-list** [python (uv), argparse]: List DevPod workspaces with rich-formatted tables.

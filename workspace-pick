@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Usage: workspace-pick [-e] [-j] [-l] [-h] [QUERY]
+#
+# Select a workspace interactively via fzf and print its path to stdout.
+# Workspaces are discovered by workspace-list.
+#
+# Options:
+#     -e          Exact match: prefix the fzf query with ' (non-fuzzy)
+#     -j          Enrich entries with Jira metadata (slower; passed to workspace-list)
+#                 Also caches summaries to .description via --cache-desc
+#     -l          List mode: print all matching paths instead of picking one
+#     -h          Show this help message
+
+set -euo pipefail
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+die() {
+    printf '%s\n' "$*" >&2
+    exit 1
+}
+
+jira=0
+exact=0
+list=0
+query=
+
+process_arguments() {
+    while getopts ':ejlh' opt; do
+        case $opt in
+            e) exact=1 ;;
+            j) jira=1 ;;
+            l) list=1 ;;
+            h) show_help; exit 0 ;;
+            \?)
+                printf 'error: unknown option: -%s\n' "$OPTARG" >&2
+                show_help >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    if [ $# -gt 0 ]; then
+        query=$1
+    fi
+}
+
+main() {
+    process_arguments "$@"
+
+    lw_args=(--json)
+    if [ "$jira" -eq 1 ]; then
+        lw_args+=(--jira --cache-desc)
+    fi
+    json=$(workspace-list "${lw_args[@]}") || json='[]'
+    count=$(printf '%s' "$json" | jq 'length')
+    if [ "$count" -eq 0 ]; then
+        die 'no workspaces found'
+    fi
+
+    fzf_input=$(
+        printf '%s' "$json" | jq -r --argjson jira "$jira" '
+            def display_label:
+                if ((.name // "") != "") and ((.branch // "") != "") and (.name != .branch) then
+                    .name + " (" + .branch + ")"
+                elif (.name // "") != "" then
+                    .name
+                elif (.branch // "") != "" then
+                    .branch
+                else
+                    "-"
+                end;
+            def display:
+                display_label
+                + " │ " + (if .repo then .repo else "-" end)
+                + (if $jira == 1 then " │ " + (if .status != "" then .status else "-" end) else "" end)
+                + (if .summary != "" then " │ " + .summary else "" end);
+            def search:
+                [.name, .repo, .summary]
+                | map(select(. != null and . != ""))
+                | unique
+                | join(" ");
+            .[] | [
+                .path,
+                display,
+                search,
+                (if .last_used then .last_used else "unknown" end)
+            ] | @tsv'
+    )
+
+    fzf_query=$query
+    if [ "$exact" -eq 1 ]; then
+        fzf_query="'${query}"
+    fi
+
+    if [ "$list" -eq 1 ]; then
+        printf '%s' "$fzf_input" |
+        fzf \
+            -f "$fzf_query" \
+            --delimiter=$'\t' \
+            --nth=3 \
+            --no-sort |
+        cut -f1
+        exit 0
+    fi
+
+    selected=$(
+        printf '%s' "$fzf_input" |
+        fzf \
+            --delimiter=$'\t' \
+            --nth=3 \
+            --with-nth=2 \
+            --no-sort \
+            --query="$fzf_query" \
+            --preview='printf "Path:      %s\nLast used: %s\n" {1} {4}' \
+            --preview-window=down:3:wrap \
+            --prompt='workspace> ' \
+            --height=40%
+    ) || exit 0
+
+    if [ -z "$selected" ]; then
+        exit 0
+    fi
+
+    path=$(printf '%s' "$selected" | cut -f1)
+
+    if [ -z "$path" ]; then
+        die 'error: could not extract path from selection'
+    fi
+    if [ ! -d "$path" ]; then
+        die "error: workspace path does not exist: $path"
+    fi
+
+    printf '%s\n' "$path"
+}
+
+main "$@"
