@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# fclones transform: fingerprint archive contents
+
+set -euo pipefail
+
+usage() {
+    echo >&2 "${0##*/} [options] FILEPATH"
+    exit 2
+}
+
+mode=full
+while getopts cbh opt; do
+    case "$opt" in
+        c)
+            # checksum only
+            mode=checksum
+            ;;
+        b)
+            # basename only
+            mode=base
+            ;;
+        \? | h)
+            usage
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+input=${1:-${IN:-}}
+
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/fclones-decompress.XXXXXX")"
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+if [ -n "$input" ]; then
+    src="$input"
+else
+    src="$tmp/input"
+    cat >"$src"
+fi
+
+out="$tmp/out"
+mkdir "$out"
+
+if lsar "$src" &>/dev/null; then
+    if unar -q -o "$out" "$src"; then
+        (
+            cd "$out"
+
+            find . -type f \
+              ! -name '.DS_Store' \
+              ! -name 'Thumbs.db' \
+              ! -name 'desktop.ini' \
+              ! -path './__MACOSX/*' \
+              ! -name '._*' \
+              -print0 | \
+                LC_ALL=C sort -z | \
+                while IFS= read -r -d '' f; do
+                    h=$(sha256sum "$f" | awk '{print $1}')
+                    case "$mode" in
+                        full)
+                            printf '%s  %s\n' "$h" "$f"
+                            ;;
+                        checksum)
+                            printf '%s\n' "$h"
+                            ;;
+                        base)
+                            printf '%s  %s\n' "$h" "$(basename "$f")"
+                            ;;
+                        *)
+                            echo >&2 "Error: unsupported mode: $mode"
+                            exit 1
+                            ;;
+                    esac
+                done
+        )
+    else
+        echo >&2 "Error extracting $src"
+        exit 1
+    fi
+else
+    # Not an archive
+    sha256sum "$src"
+fi

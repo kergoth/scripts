@@ -163,7 +163,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **dedup-foreach** [bash, none]: Run a command per group of duplicates from jdupes-oneline.
 - **dirdiff-to-difflike** [sh, none]: Convert dirdiff output to diff-like prefixes.
 - **dirdiff-to-gitstatus** [sh, none]: Convert dirdiff output to git-status-like prefixes.
-- **fclones-decompress** [bash, -h]: fclones transformation that extracts archives.
+- **fclones-extract** [bash, -h]: fclones transform: extracts archive contents via unar, fingerprints each file (full/checksum/basename modes).
 - **fclones-to-fdupes** [sh, none]: Reformat fclones output as fdupes oneline.
 - **fclones-unzip** [bash, none]: fclones transform: extract single-file zips.
 - **fdupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing).
