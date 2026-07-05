@@ -58,13 +58,19 @@ if [ $# -ne 1 ]; then
 fi
 filename="$(abspath "$1")"
 
-tempdir="$(mktemp -d -t "${0##*/}.XXXXXX")"
+tempdir="$(mktemp -p "${TMPDIR:-/tmp}" -d "${0##*/}.XXXXXX")"
 trap 'rm -rf "$tempdir"' EXIT INT TERM
 cd "$tempdir"
 
+echo >&2 "Extracting $1"
 # shellcheck disable=SC2046
-if extract "$filename" >/dev/null 2>&1 && [ $(find . -type f | wc -l) -eq 1 ]; then
-    cat "$(find . -type f)"
+if extract "$filename" >/dev/null 2>&1; then
+    find . -type f
 else
-    cat "$filename"
-fi
+    printf '%s' "$filename"
+fi |
+    LC_ALL=C sort |
+    while read -r f; do
+        h=$(sha256sum "$f" | awk "{print \$1}")
+        printf "%s  %s\n" "$h" "$f"
+    done
