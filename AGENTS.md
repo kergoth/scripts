@@ -142,7 +142,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **csvpyrow** [python (uv), --help]: Filter CSV rows with a Python expression (kcompile-based).
 - **csvsum** [sh, none]: Sum the first column of a CSV.
 
-## comm/diff/dupe utilities (`comm-*`, `dirdiff-*`, `fdupes-*`, `fclones-*`, `jdupes-*`, `kdedup`, `dedup-foreach`, `same-file`, `fgroups-format`)
+## comm/diff/dupe utilities (`comm-*`, `dirdiff-*`, `fdupes-*`, `fclones-*`, `dupes-*`, `kdedup`, `dedup-foreach`, `same-file`, `fgroups-format`)
 - **comm-cmd** [sh, none]: Run two commands and `comm` their stdout.
 - **comm-files** [sh, -h]: Compare two directories' file listings via comm.
 - **comm-to-difflike** [sh, none]: Convert comm output to diff-like ±/space prefixes.
@@ -157,10 +157,10 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **fdupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing).
 - **fdupes-xargs** [bash, none]: Run a command on each dupe in jdupes-oneline output.
 - **fgroups-format** [sh, none]: Reformat findgroups output as plain paths.
-- **jdupes-multiline** [python, none]: Convert jdupes oneline output to multi-line blocks.
-- **jdupes-oneline** [python, none]: Convert jdupes blocks to one tab-separated line each.
-- **jdupes-remove-missing** [python, none]: Drop missing files from multi-line dupe output.
-- **jdupes-remove-nondupes** [python, none]: Drop dupe groups with only one entry.
+- **dupes-remove-missing** [python, none]: Drop missing files from multi-line (fdupes-format) dupe output.
+- **dupes-remove-nondupes** [python, none]: Drop dupe groups with only one entry.
+- **dupes-to-multiline** [python, none]: Convert tab-separated oneline dupe output to multi-line (fdupes-format) blocks.
+- **dupes-to-oneline** [python, none]: Convert multi-line (fdupes-format) dupe blocks to one tab-separated line each.
 - **kdedup** [sh, -h]: Group stdin paths by stdout of an identifier command.
 - **same-file** [bash, none]: Exit 0 iff all paths share inode+device.
 

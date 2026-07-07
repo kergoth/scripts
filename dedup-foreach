@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-jdupes-oneline \
+dupes-to-oneline \
     | sed -e 's/\\ / /g' \
     | while read -r line; do
         printf '%s\n' "$line" | tr '\t' '\0' | tr -d '\n' | xargs -0 "$@" || :

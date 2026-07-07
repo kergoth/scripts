@@ -43,10 +43,10 @@ if echo "$*" | grep -q '{}'; then
 fi
 
 remove_nondupes() {
-    jdupes-oneline |
+    dupes-to-oneline |
         sed -e "s/$TAB*$//" |
         grep "$TAB" |
-        jdupes-multiline
+        dupes-to-multiline
 }
 
 if [ $# -gt 0 ]; then

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-jdupes-oneline |
+dupes-to-oneline |
     while read -r line; do
         IFS=$'\t' read -d '' -r -a files < <(echo "$line" | sed -e 's/\\ / /g' | tr -d '\n') || :
         for file in "${files[@]}"; do
