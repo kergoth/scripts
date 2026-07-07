@@ -32,7 +32,7 @@ fi
 
 input=${1:-${IN:-}}
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/fclones-decompress.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 if [ -n "$input" ]; then
