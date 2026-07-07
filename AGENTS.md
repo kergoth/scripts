@@ -142,23 +142,23 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **csvpyrow** [python (uv), --help]: Filter CSV rows with a Python expression (kcompile-based).
 - **csvsum** [sh, none]: Sum the first column of a CSV.
 
-## comm/diff/dupe utilities (`comm-*`, `dirdiff-*`, `fdupes-*`, `fclones-*`, `dupes-*`, `kdedup`, `dedup-foreach`, `same-file`, `fgroups-format`)
+## comm/diff/dupe utilities (`comm-*`, `dirdiff-*`, `fclones-*`, `dupes-*`, `kdedup`, `same-file`, `fgroups-format`)
 - **comm-cmd** [sh, none]: Run two commands and `comm` their stdout.
 - **comm-files** [sh, -h]: Compare two directories' file listings via comm.
 - **comm-to-difflike** [sh, none]: Convert comm output to diff-like ±/space prefixes.
 - **comm-unsorted** [sh, none]: Run comm on unsorted inputs (sort first).
 - **comm-words** [sh, -h]: Compare two strings as space-separated word sets.
-- **dedup-foreach** [bash, none]: Run a command per group of duplicates (all files in a group as args, one group per invocation), continuing past per-group failures.
 - **dirdiff-to-difflike** [sh, none]: Convert dirdiff output to diff-like prefixes.
 - **dirdiff-to-gitstatus** [sh, none]: Convert dirdiff output to git-status-like prefixes.
-- **fclones-extract** [bash, -h]: fclones transform: extracts archive contents via unar, fingerprints each file (full/checksum/basename modes). `-c` mode matches archived content against raw duplicates regardless of container format.
-- **fclones-to-fdupes** [sh, none]: Reformat fclones's own default group output as fdupes-format (blank-line-separated) output.
-- **fdupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing).
-- **fgroups-format** [sh, none]: Reformat fclones's own default group output as plain paths.
+- **dupes-foreach** [bash, none]: Run a command per group of duplicates (all files in a group as args, one group per invocation), continuing past per-group failures.
 - **dupes-remove-missing** [python, none]: Drop missing files from multi-line (fdupes-format) dupe output.
 - **dupes-remove-nondupes** [python, none]: Drop dupe groups with only one entry.
+- **dupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing).
 - **dupes-to-multiline** [python, none]: Convert tab-separated oneline dupe output to multi-line (fdupes-format) blocks.
 - **dupes-to-oneline** [python, none]: Convert multi-line (fdupes-format) dupe blocks to one tab-separated line each.
+- **fclones-extract** [bash, -h]: fclones transform: extracts archive contents via unar, fingerprints each file (full/checksum/basename modes). `-c` mode matches archived content against raw duplicates regardless of container format.
+- **fclones-to-fdupes** [sh, none]: Reformat fclones's own default group output as fdupes-format (blank-line-separated) output.
+- **fgroups-format** [sh, none]: Reformat fclones's own default group output as plain paths.
 - **kdedup** [sh, -h]: Group stdin paths by stdout of an identifier command.
 - **same-file** [bash, none]: Exit 0 iff all paths share inode+device.
 
@@ -369,6 +369,6 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 ## Cautions
 - **No `--help` long-option support** outside Python scripts and a small set of bash scripts (`git-setup`, `wait-for-nas-connectivity`). When in doubt, try `-h` first.
 - **Several scripts run destructive operations without `-h` check or confirmation.** Flagged inline with **DESTRUCTIVE**. Examples: `brew-clean`, `brew-reinstall-casks`, `brew-wipe-cache`, `bb-clean`, `bb-kill`, `nix-clean`, `pacman-remove-orphans`, `clean-sstate`, `bgrm`, `kkill`, `cleaneject`, `ddimage-sd`, `resolvelinks`, `remove-empty-dirs`, `safari-webapp-cache-clean`. Read source before invoking unfamiliar ones.
-- **uv-script convention.** Scripts with `#!/usr/bin/env -S uv run --script` and inline `# /// script` headers manage their own deps: `cached-retool`, `csvpyrow`, `devpod-list`, `fdupes-select`, `ia-parallel-download`, `strip-emoji`, `yocto-releases`.
+- **uv-script convention.** Scripts with `#!/usr/bin/env -S uv run --script` and inline `# /// script` headers manage their own deps: `cached-retool`, `csvpyrow`, `devpod-list`, `dupes-select`, `ia-parallel-download`, `strip-emoji`, `yocto-releases`.
 - **Vendored Perl `ack`.** ~168 KB: a full third-party tool, not user code.
 - **Many bb-* and brew-* scripts are 1-3 lines.** Reading source for those is faster than probing `-h`. Use the index to identify them by `[type, none]` and a tiny purpose blurb.
