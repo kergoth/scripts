@@ -4,7 +4,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 
 ## Working here
 - Probe `<script> -h` (or `--help`) before reading source. The inventory below shows which scripts respond.
-- Apply the `shell-script-style` skill when creating or substantially editing user-facing scripts.
+- Apply the `shell-script-style` and `cli-design` skills when creating or substantially editing user-facing scripts.
 - Scripts marked **DESTRUCTIVE** mutate the filesystem, packages, or remote state without prompting; review source before invoking.
 - One logical change per commit. Recent history uses "Add X" / "Add X wrapper" subjects for new scripts; describe the actual change for modifications.
 - Older scripts (most `bb-*`, `brew-*`, etc.) often don't intercept help flags. Newer scripts (model wrappers, build helpers, recent additions) standardize on `-h` or `-h/--help`.
