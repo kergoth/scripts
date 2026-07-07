@@ -148,14 +148,13 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **comm-to-difflike** [sh, none]: Convert comm output to diff-like ±/space prefixes.
 - **comm-unsorted** [sh, none]: Run comm on unsorted inputs (sort first).
 - **comm-words** [sh, -h]: Compare two strings as space-separated word sets.
-- **dedup-foreach** [bash, none]: Run a command per group of duplicates from jdupes-oneline.
+- **dedup-foreach** [bash, none]: Run a command per group of duplicates (all files in a group as args, one group per invocation), continuing past per-group failures.
 - **dirdiff-to-difflike** [sh, none]: Convert dirdiff output to diff-like prefixes.
 - **dirdiff-to-gitstatus** [sh, none]: Convert dirdiff output to git-status-like prefixes.
 - **fclones-extract** [bash, -h]: fclones transform: extracts archive contents via unar, fingerprints each file (full/checksum/basename modes).
 - **fclones-to-fdupes** [sh, none]: Reformat fclones output as fdupes oneline.
 - **fclones-unzip** [bash, none]: fclones transform: extract single-file zips.
 - **fdupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing).
-- **fdupes-xargs** [bash, none]: Run a command on each dupe in jdupes-oneline output.
 - **fgroups-format** [sh, none]: Reformat findgroups output as plain paths.
 - **dupes-remove-missing** [python, none]: Drop missing files from multi-line (fdupes-format) dupe output.
 - **dupes-remove-nondupes** [python, none]: Drop dupe groups with only one entry.
