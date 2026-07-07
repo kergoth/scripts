@@ -152,7 +152,7 @@ def generate_download_tasks(
     tasks: List[DownloadTask] = []
     for url in urls:
         rel = extract_path_from_url(identifier, url)
-        full = dest / identifier / rel
+        full = identifier / rel
         tasks.append(DownloadTask(url=url, local_path=full))
     return tasks
 
@@ -165,8 +165,8 @@ def create_aria2c_input(
     with input_file.open('w', encoding='utf-8') as f:
         for task in tasks:
             f.write(task.url + '\n')
-            f.write(f"  dir={task.local_path.parent}\n")
-            f.write(f"  out={task.local_path.name}\n\n")
+            # f.write(f"  dir={task.local_path.parent}\n")
+            f.write(f"  out={task.local_path}\n\n")
 
 
 @click.command()
@@ -210,6 +210,7 @@ def main(
     if not identifiers:
         return
 
+    dest = dest.resolve()
     verify_dependency(IA_CMD)
     verify_dependency(ARIA2C_CMD)
 
@@ -242,6 +243,7 @@ def main(
     try:
         run_command([
             ARIA2C_CMD,
+            '--dir', str(dest),
             '--input-file', str(input_path),
             '--max-concurrent-downloads', str(workers),
             '--split', '5',

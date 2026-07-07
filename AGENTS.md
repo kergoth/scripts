@@ -127,22 +127,10 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **jira-to-project** [bash, -h]: Render Jira data into a project directory.
 - **jira-view** [sh, none]: Tput-colored formatter for jira issue lists.
 
-## env / venv managers (`pipv*`, `pipx-install`, `cpanmv*`, `gemv`, `npmv`, `luav`, `kpipsi*`, `nixrun`, `nixshell`)
-- **cpanmv** [sh, none]: Install Perl modules into named env at `$CPANM_HOME/<env>`.
-- **cpanmv-use** [sh, none]: Activate (eval) a cpanmv env in the current shell.
-- **gemv** [sh, none]: Install Ruby gems into a named env at `$GEMENV_HOME`.
-- **kpipsi** [sh, passthru]: pipsi wrapper accepting extra packages and shorter list option.
-- **kpipsi-upgrade** [sh, none]: Upgrade every kpipsi-managed env.
-- **luav** [bash, none]: Provision an isolated Lua sandbox via vert and luarocks.
-- **npmv** [sh, none]: Install npm packages into named env at `$NPMENV_HOME`.
+## Nix
 - **nix-clean** [sh, none]: Expire generations, GC, and optimize Nix store. **DESTRUCTIVE**.
 - **nixrun** [bash, passthru]: `nix run nixpkgs#<pkg>` shortcut.
 - **nixshell** [bash, none]: `nix-shell --run` wrapper that quotes args correctly.
-- **pipv** [sh, none]: Install Python packages into named virtualenv (Python 2 fallback).
-- **pipv-for-each** [sh, none]: Run a command in every virtualenv under `$WORKON_HOME`.
-- **pipv-upgrade** [sh, none]: Upgrade every pipv env.
-- **pipv3** [sh, none]: Like `pipv` but Python 3 only.
-- **pipx-install** [sh, -h]: pipx install with implicit-package and force flags.
 
 ## CSV utilities (`csv*`)
 - **csvaddrow** [python, argparse]: Append a CSV row with values defined by Python expressions.
