@@ -151,9 +151,9 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **dirdiff-to-difflike** [sh, none]: Convert dirdiff output to diff-like prefixes.
 - **dirdiff-to-gitstatus** [sh, none]: Convert dirdiff output to git-status-like prefixes.
 - **dupes-foreach** [bash, none]: Run a command per group of duplicates (all files in a group as args, one group per invocation), continuing past per-group failures.
-- **dupes-remove-missing** [python, none]: Drop missing files from multi-line (fdupes-format) dupe output.
-- **dupes-remove-nondupes** [python, none]: Drop dupe groups with only one entry.
-- **dupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing).
+- **dupes-remove-missing** [python, none]: Drop missing files from multi-line (fdupes-format) dupe output. Composable pipeline step; `dupes-select -e` covers the common case of this piped into `dupes-remove-nondupes` in one pass.
+- **dupes-remove-nondupes** [python, none]: Drop dupe groups with only one entry. See `dupes-remove-missing` re: overlap with `dupes-select -e`.
+- **dupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing). `-e`/`--existing` alone approximates `dupes-remove-missing | dupes-remove-nondupes`.
 - **dupes-to-multiline** [python, none]: Convert tab-separated oneline dupe output to multi-line (fdupes-format) blocks.
 - **dupes-to-oneline** [python, none]: Convert multi-line (fdupes-format) dupe blocks to one tab-separated line each.
 - **fclones-extract** [bash, -h]: fclones transform: extracts archive contents via unar, fingerprints each file (full/checksum/basename modes). `-c` mode matches archived content against raw duplicates regardless of container format.
