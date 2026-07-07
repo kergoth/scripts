@@ -152,10 +152,10 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **dirdiff-to-difflike** [sh, none]: Convert dirdiff output to diff-like prefixes.
 - **dirdiff-to-gitstatus** [sh, none]: Convert dirdiff output to git-status-like prefixes.
 - **fclones-extract** [bash, -h]: fclones transform: extracts archive contents via unar, fingerprints each file (full/checksum/basename modes).
-- **fclones-to-fdupes** [sh, none]: Reformat fclones output as fdupes oneline.
+- **fclones-to-fdupes** [sh, none]: Reformat fclones's own default group output as fdupes-format (blank-line-separated) output.
 - **fclones-unzip** [bash, none]: fclones transform: extract single-file zips.
 - **fdupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing).
-- **fgroups-format** [sh, none]: Reformat findgroups output as plain paths.
+- **fgroups-format** [sh, none]: Reformat fclones's own default group output as plain paths.
 - **dupes-remove-missing** [python, none]: Drop missing files from multi-line (fdupes-format) dupe output.
 - **dupes-remove-nondupes** [python, none]: Drop dupe groups with only one entry.
 - **dupes-to-multiline** [python, none]: Convert tab-separated oneline dupe output to multi-line (fdupes-format) blocks.
