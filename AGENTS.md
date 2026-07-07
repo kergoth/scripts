@@ -151,9 +151,8 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **dedup-foreach** [bash, none]: Run a command per group of duplicates (all files in a group as args, one group per invocation), continuing past per-group failures.
 - **dirdiff-to-difflike** [sh, none]: Convert dirdiff output to diff-like prefixes.
 - **dirdiff-to-gitstatus** [sh, none]: Convert dirdiff output to git-status-like prefixes.
-- **fclones-extract** [bash, -h]: fclones transform: extracts archive contents via unar, fingerprints each file (full/checksum/basename modes).
+- **fclones-extract** [bash, -h]: fclones transform: extracts archive contents via unar, fingerprints each file (full/checksum/basename modes). `-c` mode matches archived content against raw duplicates regardless of container format.
 - **fclones-to-fdupes** [sh, none]: Reformat fclones's own default group output as fdupes-format (blank-line-separated) output.
-- **fclones-unzip** [bash, none]: fclones transform: extract single-file zips.
 - **fdupes-select** [python (uv), --help]: Filter dupe blocks (keep/remove/first/existing).
 - **fgroups-format** [sh, none]: Reformat fclones's own default group output as plain paths.
 - **dupes-remove-missing** [python, none]: Drop missing files from multi-line (fdupes-format) dupe output.
