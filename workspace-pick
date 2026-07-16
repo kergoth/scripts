@@ -110,7 +110,6 @@ main() {
         printf '%s' "$fzf_input" |
         fzf \
             --delimiter=$'\t' \
-            --nth=3 \
             --with-nth=2 \
             --no-sort \
             --query="$fzf_query" \
