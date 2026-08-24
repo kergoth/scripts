@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage: goodlinks-maintain [-a] [-h]
+#
+# Run all GoodLinks library maintenance passes: autotag by URL host, mark
+# read any link tagged with a read-invariant tag (e.g. reference), and
+# remove mailto: links (they open Mail instead of showing content).
+# Dry-run by default; each pass reports what it would change.
+#
+# Options:
+#     -a          Apply changes (default is dry-run)
+#     -h          Show this help message
+
+usage() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    apply=0
+    while getopts ':ah' opt; do
+        case "$opt" in
+        a)
+            apply=1
+            ;;
+        h)
+            usage
+            exit 0
+            ;;
+        \?)
+            echo "Unknown option: -$OPTARG" >&2
+            usage >&2
+            exit 1
+            ;;
+        esac
+    done
+}
+
+main() {
+    process_arguments "$@"
+
+    local -a flag=()
+    if [ "$apply" -eq 1 ]; then
+        flag=(--apply)
+    fi
+
+    goodlinks-autotag "${flag[@]}"
+    goodlinks-mark-invariant-read "${flag[@]}"
+    goodlinks-remove-mailto "${flag[@]}"
+}
+
+main "$@"

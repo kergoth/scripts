@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Remove GoodLinks links whose URL is a mailto: link.
+
+Clicking a mailto: link in the GoodLinks app opens Mail instead of showing
+content, so these are junk saves rather than readable links.
+
+Dry-run by default; pass --apply to actually delete via goodlinksctl.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from typing import Any
+
+
+def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, text=True, capture_output=True)
+
+
+def fetch_links() -> list[dict[str, Any]]:
+    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    proc = run(cmd)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or proc.stdout)
+        raise SystemExit(proc.returncode)
+    payload = json.loads(proc.stdout)
+    return payload.get("data", [])
+
+
+def is_mailto(link: dict[str, Any]) -> bool:
+    return str(link.get("url", "")).lower().startswith("mailto:")
+
+
+def delete(ids: list[str]) -> int:
+    dry = subprocess.run(
+        ["goodlinksctl", "--json", "links", "delete", *ids, "--dry-run"],
+        text=True,
+        capture_output=True,
+    )
+    if dry.returncode not in (0, 7):
+        sys.stderr.write(dry.stderr or dry.stdout)
+        return dry.returncode
+    preflight = json.loads(dry.stdout)
+    if preflight.get("summary", {}).get("failed"):
+        sys.stderr.write(dry.stdout)
+        print("preflight reported failures, aborting delete", file=sys.stderr)
+        return 1
+
+    proc = subprocess.run(
+        ["goodlinksctl", "--json", "links", "delete", *ids, "--yes"],
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode not in (0, 7):
+        sys.stderr.write(proc.stderr or proc.stdout)
+        return proc.returncode
+    print(proc.stdout)
+    return 0 if proc.returncode == 0 else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--apply", action="store_true", help="Delete instead of dry-run"
+    )
+    args = parser.parse_args()
+
+    links = fetch_links()
+    pending = [link for link in links if is_mailto(link)]
+    for link in pending:
+        print(f"{link['id']}\t{link.get('url', '')}\t{link.get('title', '')}")
+
+    mode = "apply" if args.apply else "dry-run"
+    print(f"summary\tmode={mode}\tmatched={len(pending)}")
+
+    if not pending:
+        return 0
+    if not args.apply:
+        return 0
+    return delete([link["id"] for link in pending])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
