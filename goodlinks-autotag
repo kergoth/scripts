@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Auto-tag GoodLinks links by URL host, driven by a rule table.
+
+Dry-run by default; pass --apply to actually write tags via goodlinksctl.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import urlparse
+
+
+@dataclass(frozen=True)
+class Rule:
+    """Add tags to links whose host matches, optionally gated by URL path.
+
+    hosts is matched exactly against the URL hostname (minus leading
+    "www."), never against the path or query string, so a host name
+    appearing incidentally elsewhere in a URL can't trigger a rule.
+    include_path/exclude_path are only consulted once hosts has already
+    matched; exclude_path wins if both match.
+    """
+
+    hosts: frozenset[str]
+    tags: tuple[str, ...]
+    include_path: re.Pattern[str] | None = None
+    exclude_path: re.Pattern[str] | None = None
+
+    def matches(self, host: str, url: str) -> bool:
+        if host not in self.hosts:
+            return False
+        if self.exclude_path and self.exclude_path.search(url):
+            return False
+        if self.include_path and not self.include_path.search(url):
+            return False
+        return True
+
+
+YOUTUBE_HOSTS = frozenset({"youtube.com", "youtu.be"})
+YOUTUBE_CHANNEL_RE = re.compile(r"/(channel|c|user)/|/@")
+
+RULES: list[Rule] = [
+    Rule(frozenset({"github.com"}), ("to-do",)),
+    Rule(frozenset({"amazon.com"}), ("to-buy",)),
+    Rule(
+        frozenset(
+            {
+                "barnesandnoble.com",
+                "goodreads.com",
+                "leanpub.com",
+                "bookshop.org",
+                "macmillan.com",
+            }
+        ),
+        ("to-be-read",),
+    ),
+    Rule(frozenset({"standardebooks.org"}), ("to-do",)),
+    Rule(frozenset({"pypi.org"}), ("to-do",)),
+    Rule(frozenset({"python.org", "pypi.org"}), ("python",)),
+    Rule(frozenset({"dailydad.com"}), ("parenting",)),
+    Rule(frozenset({"dailydad.com"}), ("philosophy",)),
+    Rule(frozenset({"ryanholiday.net"}), ("philosophy",)),
+    Rule(frozenset({"dailystoic.com"}), ("philosophy",)),
+    Rule(YOUTUBE_HOSTS, ("to-watch",), exclude_path=YOUTUBE_CHANNEL_RE),
+    Rule(YOUTUBE_HOSTS, ("to-subscribe",), include_path=YOUTUBE_CHANNEL_RE),
+]
+
+# Exclusive tags are mutually exclusive; don't add a host-based exclusive
+# tag to a link someone has already deliberately placed in a different one.
+EXCLUSIVE_TAGS = {
+    "reference",
+    "to-watch",
+    "to-do",
+    "to-be-read",
+    "to-subscribe",
+    "to-buy",
+    "to-sift",
+    "to-listen",
+    "to-share",
+    "to-remove",
+    "to-triage",
+}
+
+
+def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, text=True, capture_output=True, check=False)
+
+
+def fetch_links() -> list[dict[str, Any]]:
+    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    proc = run(cmd)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or proc.stdout)
+        raise SystemExit(proc.returncode)
+    payload = json.loads(proc.stdout)
+    return payload.get("data", [])
+
+
+def host_of(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower()
+    return host.removeprefix("www.")
+
+
+def tags_to_add(link: dict[str, Any]) -> list[str]:
+    url = str(link.get("url", ""))
+    host = host_of(url)
+    existing = {str(t) for t in link.get("tags") or []}
+    has_exclusive_tag = bool(existing & EXCLUSIVE_TAGS)
+
+    tags: list[str] = []
+    for rule in RULES:
+        if not rule.matches(host, url):
+            continue
+        for tag in rule.tags:
+            if tag in existing or tag in tags:
+                continue
+            if has_exclusive_tag and tag in EXCLUSIVE_TAGS:
+                continue
+            tags.append(tag)
+
+    return tags
+
+
+def apply_updates(updates: list[dict[str, Any]]) -> int:
+    payload = "\n".join(json.dumps(u) for u in updates)
+    proc = subprocess.run(
+        ["goodlinksctl", "--json", "links", "update", "--stdin-jsonl"],
+        input=payload,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode not in (0, 7):
+        sys.stderr.write(proc.stderr or proc.stdout)
+        return proc.returncode
+    print(proc.stdout)
+    return 0 if proc.returncode == 0 else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--apply", action="store_true", help="Write tags instead of dry-run"
+    )
+    args = parser.parse_args()
+
+    links = fetch_links()
+    pending = []
+    for link in links:
+        add = tags_to_add(link)
+        if not add:
+            continue
+        pending.append({"id": link["id"], "addedTags": add})
+        print(f"{link['id']}\t+{','.join(add)}\t{link.get('title', '')}")
+
+    mode = "apply" if args.apply else "dry-run"
+    print(f"summary\tmode={mode}\tmatched={len(pending)}")
+
+    if not pending:
+        return 0
+    if not args.apply:
+        return 0
+    return apply_updates(pending)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
