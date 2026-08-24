@@ -216,6 +216,27 @@ def add_tag_check_links_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_newsletter_inventory_arguments(parser: argparse.ArgumentParser) -> None:
+    add_cache_arguments(parser)
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        help="Do not refresh the local Reader cache before building the inventory",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("csv", "json"),
+        default="csv",
+        help="Inventory output format (default: csv)",
+    )
+    parser.add_argument(
+        "--output",
+        default="-",
+        metavar="PATH",
+        help="Write output to PATH, or '-' for stdout (default)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Readwise Reader library maintenance utilities"
@@ -249,6 +270,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Apply tags to Reader documents from check-links CSV output",
     )
     add_tag_check_links_arguments(tag_check_links_parser)
+
+    newsletter_inventory_parser = subparsers.add_parser(
+        "newsletter-inventory",
+        help="List Reader email senders for newsletter migration",
+        description="List Reader email senders for newsletter migration",
+    )
+    add_newsletter_inventory_arguments(newsletter_inventory_parser)
     return parser
 
 
@@ -260,7 +288,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         return parser.parse_args(args_in)
 
     if args_in[0].startswith("-"):
-        commands = {"dedupe", "stats", "check-links", "tag-check-links"}
+        commands = {
+            "dedupe",
+            "stats",
+            "check-links",
+            "tag-check-links",
+            "newsletter-inventory",
+        }
         command_index = next(
             (i for i, arg in enumerate(args_in) if arg in commands),
             None,
@@ -345,8 +379,14 @@ def _fetch_pages(
             params = {"pageCursor": cursor}
 
 
-def list_documents(token: str, updated_after: str | None = None) -> Iterator[dict]:
-    for page_docs, _ in _fetch_pages(token, updated_after=updated_after):
+def list_documents(
+    token: str,
+    updated_after: str | None = None,
+) -> Iterator[dict]:
+    for page_docs, _ in _fetch_pages(
+        token,
+        updated_after=updated_after,
+    ):
         yield from page_docs
 
 
@@ -1412,6 +1452,98 @@ def run_tag_check_links(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def newsletter_inventory_rows(docs: list[dict]) -> list[dict[str, str | int]]:
+    senders: dict[tuple[str, str], dict[str, str | int]] = {}
+
+    for doc in docs:
+        if doc.get("category") != "email":
+            continue
+
+        author = str(doc.get("author") or "").strip()
+        site_name = str(doc.get("site_name") or "").strip()
+        key = (author, site_name)
+        saved_at = str(doc.get("saved_at") or "")
+
+        row = senders.get(key)
+        if row is None:
+            row = {
+                "author": author,
+                "site_name": site_name,
+                "email_count": 0,
+                "opened_count": 0,
+                "newest_saved_at": saved_at,
+                "last_opened_at": "",
+                "newest_title": str(doc.get("title") or "").strip(),
+                "example_document_id": str(doc.get("id") or ""),
+            }
+            senders[key] = row
+
+        row["email_count"] = int(row["email_count"]) + 1
+        if doc.get("first_opened_at"):
+            row["opened_count"] = int(row["opened_count"]) + 1
+        last_opened_at = str(doc.get("last_opened_at") or "")
+        if last_opened_at > str(row["last_opened_at"]):
+            row["last_opened_at"] = last_opened_at
+        if saved_at > str(row["newest_saved_at"]):
+            row["newest_saved_at"] = saved_at
+            row["newest_title"] = str(doc.get("title") or "").strip()
+            row["example_document_id"] = str(doc.get("id") or "")
+
+    return sorted(
+        senders.values(),
+        key=lambda row: (
+            -int(row["opened_count"]),
+            -int(row["email_count"]),
+            str(row["author"]).casefold(),
+            str(row["site_name"]).casefold(),
+        ),
+    )
+
+
+def write_newsletter_inventory(
+    rows: list[dict[str, str | int]],
+    output: str,
+    output_format: str,
+) -> None:
+    columns = (
+        "author",
+        "site_name",
+        "email_count",
+        "opened_count",
+        "newest_saved_at",
+        "last_opened_at",
+        "newest_title",
+        "example_document_id",
+    )
+
+    destination = sys.stdout if output == "-" else Path(output).expanduser().open(
+        "w", newline=""
+    )
+    try:
+        if output_format == "csv":
+            writer = csv.DictWriter(destination, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(rows)
+        else:
+            json.dump(rows, destination, indent=2)
+            destination.write("\n")
+    finally:
+        if destination is not sys.stdout:
+            destination.close()
+
+
+def run_newsletter_inventory(args: argparse.Namespace) -> None:
+    setup_logging(args.verbose, args.quiet)
+    token = resolve_token()
+
+    if not args.no_refresh:
+        refresh_cache(token, full=args.refresh, max_age=args.max_age)
+
+    rows = newsletter_inventory_rows(load_cache())
+    write_newsletter_inventory(rows, args.output, args.format)
+    log.info("Wrote %d unique email sender rows", len(rows))
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.command == "dedupe":
@@ -1425,6 +1557,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "tag-check-links":
         run_tag_check_links(args)
+        return
+    if args.command == "newsletter-inventory":
+        run_newsletter_inventory(args)
         return
     raise AssertionError(f"Unhandled command: {args.command}")
 
