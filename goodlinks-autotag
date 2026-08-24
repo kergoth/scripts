@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -27,10 +28,14 @@ class Rule:
     matched; exclude_path wins if both match.
     """
 
-    hosts: frozenset[str]
-    tags: tuple[str, ...]
+    hosts: Iterable[str]
+    tags: Iterable[str]
     include_path: re.Pattern[str] | None = None
     exclude_path: re.Pattern[str] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "hosts", frozenset(self.hosts))
+        object.__setattr__(self, "tags", frozenset(self.tags))
 
     def matches(self, host: str, url: str) -> bool:
         if host not in self.hosts:
@@ -42,33 +47,31 @@ class Rule:
         return True
 
 
-YOUTUBE_HOSTS = frozenset({"youtube.com", "youtu.be"})
+YOUTUBE_HOSTS = {"youtube.com", "youtu.be"}
 YOUTUBE_CHANNEL_RE = re.compile(r"/(channel|c|user)/|/@")
 
 RULES: list[Rule] = [
-    Rule(frozenset({"github.com"}), ("to-do",)),
-    Rule(frozenset({"amazon.com"}), ("to-buy",)),
+    Rule({"github.com"}, {"to-do"}),
+    Rule({"amazon.com"}, {"to-buy"}),
     Rule(
-        frozenset(
-            {
-                "barnesandnoble.com",
-                "goodreads.com",
-                "leanpub.com",
-                "bookshop.org",
-                "macmillan.com",
-            }
-        ),
-        ("to-be-read",),
+        {
+            "barnesandnoble.com",
+            "goodreads.com",
+            "leanpub.com",
+            "bookshop.org",
+            "macmillan.com",
+        },
+        {"to-be-read"},
     ),
-    Rule(frozenset({"standardebooks.org"}), ("to-do",)),
-    Rule(frozenset({"pypi.org"}), ("to-do",)),
-    Rule(frozenset({"python.org", "pypi.org"}), ("python",)),
-    Rule(frozenset({"dailydad.com"}), ("parenting",)),
-    Rule(frozenset({"dailydad.com"}), ("philosophy",)),
-    Rule(frozenset({"ryanholiday.net"}), ("philosophy",)),
-    Rule(frozenset({"dailystoic.com"}), ("philosophy",)),
-    Rule(YOUTUBE_HOSTS, ("to-watch",), exclude_path=YOUTUBE_CHANNEL_RE),
-    Rule(YOUTUBE_HOSTS, ("to-subscribe",), include_path=YOUTUBE_CHANNEL_RE),
+    Rule({"standardebooks.org"}, {"to-do"}),
+    Rule({"pypi.org"}, {"to-do"}),
+    Rule({"python.org", "pypi.org"}, {"python"}),
+    Rule({"dailydad.com"}, {"parenting"}),
+    Rule({"dailydad.com"}, {"philosophy"}),
+    Rule({"ryanholiday.net"}, {"philosophy"}),
+    Rule({"dailystoic.com"}, {"philosophy"}),
+    Rule(YOUTUBE_HOSTS, {"to-watch"}, exclude_path=YOUTUBE_CHANNEL_RE),
+    Rule(YOUTUBE_HOSTS, {"to-subscribe"}, include_path=YOUTUBE_CHANNEL_RE),
 ]
 
 # Exclusive tags are mutually exclusive; don't add a host-based exclusive
