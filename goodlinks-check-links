@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Check GoodLinks source URLs for dead or error responses.
+
+Read-only: reports link id, url, resolved url, and result. Does not tag or
+modify GoodLinks. Pipe --json output into goodlinksctl to act on results,
+e.g. tag everything that came back dead:
+
+    goodlinks-check-links --json \\
+        | jq -r 'select(.ok == false) | .id' \\
+        | goodlinksctl links update --stdin --add-tag dead-link
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+
+DEFAULT_WORKERS = 8
+DEFAULT_TIMEOUT = 15.0
+USER_AGENT = "goodlinks-check-links/1.0"
+
+
+def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, text=True, capture_output=True)
+
+
+def fetch_links(verbosity: int) -> list[dict[str, Any]]:
+    if verbosity >= 0:
+        print("fetching links from goodlinks...", file=sys.stderr, flush=True)
+    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    proc = run(cmd)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or proc.stdout)
+        raise SystemExit(proc.returncode)
+    payload = json.loads(proc.stdout)
+    links = payload.get("data", [])
+    if verbosity >= 0:
+        print(f"fetched {len(links)} links, checking...", file=sys.stderr, flush=True)
+    return links
+
+
+def check_link(link: dict[str, Any], timeout: float) -> dict[str, Any]:
+    link_id = link.get("id", "")
+    url = link.get("url", "")
+    result: dict[str, Any] = {"id": link_id, "url": url, "resolved_url": url}
+
+    if not url or url.lower().startswith("mailto:"):
+        result.update(ok=None, status=None, reason="skipped: not http(s)")
+        return result
+
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = resp.status
+            result.update(
+                ok=status is not None and 200 <= status < 400,
+                status=status,
+                resolved_url=resp.geturl(),
+                reason=None if status is not None else "no status in response",
+            )
+    except urllib.error.HTTPError as exc:
+        result.update(ok=False, status=exc.code, reason=f"http {exc.code}")
+    except urllib.error.URLError as exc:
+        result.update(ok=False, status=None, reason=str(exc.reason))
+    except TimeoutError:
+        result.update(ok=False, status=None, reason="timeout")
+    except OSError as exc:
+        result.update(ok=False, status=None, reason=str(exc))
+    except Exception as exc:  # noqa: BLE001 - one bad link must not abort the run
+        result.update(ok=False, status=None, reason=f"unexpected: {exc}")
+
+    return result
+
+
+def check_links(
+    links: list[dict[str, Any]], workers: int, timeout: float, verbosity: int
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(check_link, link, timeout): link for link in links
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            if verbosity > 0:
+                status = "ok" if result["ok"] else (result["reason"] or "skip")
+                print(f"{status}\t{result['url']}", file=sys.stderr, flush=True)
+            elif verbosity == 0:
+                print(".", end="", file=sys.stderr, flush=True)
+    if verbosity == 0:
+        print(file=sys.stderr)
+    return results
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "-j",
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"parallel checks (default: {DEFAULT_WORKERS})",
+    )
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-request timeout in seconds (default: {DEFAULT_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="emit one JSON object per line"
+    )
+    parser.add_argument(
+        "--failures-only",
+        action="store_true",
+        help="only report links that failed the check",
+    )
+    parser.add_argument(
+        "-v",
+        dest="verbosity",
+        action="count",
+        default=0,
+        help="print each url as it's checked instead of a progress dot",
+    )
+    parser.add_argument(
+        "-q",
+        dest="quiet",
+        action="count",
+        default=0,
+        help="suppress progress output (summary still printed)",
+    )
+    args = parser.parse_args()
+    verbosity = args.verbosity - args.quiet
+
+    links = fetch_links(verbosity)
+    results = check_links(links, args.workers, args.timeout, verbosity)
+    results.sort(key=lambda r: (r["ok"] is not False, r["url"]))
+    failed = sum(1 for r in results if r["ok"] is False)
+
+    to_print = (
+        [r for r in results if r["ok"] is False] if args.failures_only else results
+    )
+    for result in to_print:
+        if args.json:
+            print(json.dumps(result))
+        else:
+            print(
+                "\t".join(
+                    str(result[key] if result[key] is not None else "")
+                    for key in ("id", "status", "reason", "url", "resolved_url")
+                )
+            )
+
+    print(f"summary\tchecked={len(results)}\tfailed={failed}", file=sys.stderr)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -344,6 +344,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 
 ## GoodLinks maintenance (`goodlinks-*`)
 - **goodlinks-autotag** [python, argparse]: Auto-tag GoodLinks links by URL host, driven by a rule table. Dry-run by default; `--apply` writes tags via `goodlinksctl`.
+- **goodlinks-check-links** [python, argparse]: Check GoodLinks source URLs for dead or error responses. Read-only; pipe `--json` failures into `goodlinksctl` to tag them.
 - **goodlinks-find-dupes** [python, argparse]: Find GoodLinks links saved more than once, grouped by raw URL, `-r` redirect-resolved URL, or `-c` canonical URL. Read-only; reports groups for manual review.
 - **goodlinks-maintain** [sh, -h]: Run all GoodLinks maintenance passes: autotag, mark read-invariant tags read, remove links with unreadable URL schemes.
 - **goodlinks-mark-invariant-read** [python, argparse]: Mark GoodLinks links read when tagged with a read-invariant tag (e.g. reference). Dry-run by default; `--apply` writes.
