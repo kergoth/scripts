@@ -342,7 +342,8 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **pinboard-add** [bash, -h]: Add URL to Pinboard with tags/title/description options.
 - **update-gist-generic** [bash, -h]: Update a github gist file from stdin or file.
 
-## Reading / personal info (`reader-views`, `ssa-total-earnings`, `ofxdate`)
+## Reading / personal info (`reader-views`, `ssa-total-earnings`, `ofxdate`, `canonical-url`)
+- **canonical-url** [bash, -h]: Print the canonical URL for each given URL (dedupe-friendly).
 - **ofxdate** [python, none]: Print end_date of OFX/QFX statement file as Unix epoch.
 - **reader-views** [bash, none]: List of personal reader-tag categories (data file as script).
 - **ssa-total-earnings** [sh, none]: Sum MedicareEarnings from SSA XML statement.

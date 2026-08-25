@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Usage: canonical-url [options] [URL..]
+#
+# For each url, print the canonical url, or nothing.
+# Without -k, immediately exits for a failure to obtain a canonical url.
+# Exit code is 1 for a failure to determine a canonical url, 2 for a failure
+# to fetch a url, otherwise 0.
+#
+# Options:
+#     -k          Continue as much as possible after an error
+#     -q          Suppress per-url failure messages
+#     -h, --help  Show this help message
+
+set -euo pipefail
+
+usage() {
+    sed -n '/^# Usage:/,/^# *-h/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+msg() {
+    local fmt=$1
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+maybe_die() {
+    local code=$1
+    shift
+    if [ "$quiet" -eq 0 ]; then
+        msg "$@"
+    fi
+    if [ "$continue" -eq 0 ]; then
+        exit "$code"
+    fi
+}
+
+nixrun() {
+    local nixpkg=$1
+    shift
+    nix run "nixpkgs#$nixpkg" -- "$@"
+}
+
+canonical() {
+    local url=$1 body result
+    if ! body=$(curl -fsSL -- "$url" 2>/dev/null); then
+        return 2
+    fi
+    result=$(printf '%s' "$body" | nixrun pup head 'link[rel="canonical"]' 'attr{href}')
+    if [ -z "$result" ]; then
+        return 1
+    fi
+    printf '%s\n' "$result"
+}
+
+process_arguments() {
+    continue=0
+    quiet=0
+    local opt
+    while getopts kqh-: opt; do
+        case "$opt" in
+            k)
+                continue=1
+                ;;
+            q)
+                quiet=1
+                ;;
+            h)
+                usage
+                exit 0
+                ;;
+            -)
+                case "$OPTARG" in
+                    help)
+                        usage
+                        exit 0
+                        ;;
+                    *)
+                        msg "Unknown option --%s" "$OPTARG"
+                        usage >&2
+                        exit 2
+                        ;;
+                esac
+                ;;
+            \?)
+                usage >&2
+                exit 2
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    urls=("$@")
+}
+
+main() {
+    process_arguments "$@"
+
+    local url canonical_url ret
+    for url in "${urls[@]}"; do
+        ret=0
+        canonical_url=$(canonical "$url") || ret=$?
+        if [ "$ret" -ne 0 ]; then
+            if [ "$ret" -eq 2 ]; then
+                maybe_die 2 "Failed to fetch %s" "$url"
+            else
+                maybe_die 1 "Failed to determine canonical url for %s" "$url"
+            fi
+            continue
+        fi
+        printf '%s\n' "$canonical_url"
+    done
+}
+
+main "$@"
