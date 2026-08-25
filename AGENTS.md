@@ -348,6 +348,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **goodlinks-find-dupes** [python, argparse]: Find GoodLinks links saved more than once, grouped by raw URL, `-r` redirect-resolved URL, or `-c` canonical URL. Read-only; reports groups for manual review.
 - **goodlinks-maintain** [sh, -h]: Run all GoodLinks maintenance passes: autotag, mark read-invariant tags read, remove links with unreadable URL schemes.
 - **goodlinks-mark-invariant-read** [python, argparse]: Mark GoodLinks links read when tagged with a read-invariant tag (e.g. reference). Dry-run by default; `--apply` writes.
+- **goodlinks-migrate-link** [python, argparse]: Recreate a dead GoodLinks link at a new URL, carrying metadata over and cross-linking old/new entries. Dry-run by default; `--apply` writes. Never deletes the old entry.
 - **goodlinks-remove-unreadable-scheme** [python, argparse]: Remove GoodLinks links whose URL scheme GoodLinks can't render (mailto:, tel:, sms:, etc. — junk saves that hand off to another app). Dry-run by default; `--apply` deletes.
 
 ## Reading / Reader / personal info (`reader-tools`, `reader-views`, `ssa-total-earnings`, `ofxdate`, `canonical-url`)
