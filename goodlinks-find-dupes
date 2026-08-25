@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""Find GoodLinks links saved more than once.
+
+GoodLinks does not reliably dedupe on exact URL match at save time --
+two entries with byte-identical URLs are possible; how they end up that
+way isn't known. Default mode groups links by their raw saved URL, no
+network calls required.
+
+Pass --follow-redirects to additionally catch duplicates that only match
+once redirects are followed (shortlinks, AMP, tracking params the origin
+strips) -- this resolves every saved URL over HTTP and groups by the
+*resolved* URL instead, which is slower and network-dependent.
+
+Pass --canonical to go a step further and group by each page's declared
+<link rel="canonical"> URL instead (implies --follow-redirects, since it
+needs the fetched page). Falls back to the resolved URL for pages with no
+canonical tag or an unparseable one -- canonical tags are opt-in and
+sometimes wrong, so treat this as a third, noisier tier on top of
+--follow-redirects rather than a replacement for it.
+
+Read-only: reports groups only, does not delete or tag anything. Review each
+group and remove the ones you don't want to keep, e.g.:
+
+    goodlinks-find-dupes --json \\
+        | jq -r '.entries[1:][].id' \\
+        | xargs goodlinksctl links delete --dry-run
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from html.parser import HTMLParser
+from typing import Any
+from urllib.parse import urljoin
+
+DEFAULT_WORKERS = 8
+DEFAULT_TIMEOUT = 15.0
+USER_AGENT = "goodlinks-find-dupes/1.0"
+MAX_CANONICAL_BODY_BYTES = 2 * 1024 * 1024
+
+
+class CanonicalLinkParser(HTMLParser):
+    """Extract the first <link rel="canonical" href="..."> found."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.canonical: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.canonical is not None or tag != "link":
+            return
+        values = dict(attrs)
+        rel = (values.get("rel") or "").lower().split()
+        href = values.get("href")
+        if "canonical" in rel and href:
+            self.canonical = href
+
+
+def extract_canonical(html: str) -> str | None:
+    parser = CanonicalLinkParser()
+    try:
+        parser.feed(html)
+    except Exception:  # noqa: BLE001 - malformed HTML must not abort the run
+        pass
+    return parser.canonical
+
+
+def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, text=True, capture_output=True)
+
+
+def fetch_links(verbosity: int) -> list[dict[str, Any]]:
+    if verbosity >= 0:
+        print("fetching links from goodlinks...", file=sys.stderr, flush=True)
+    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    proc = run(cmd)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or proc.stdout)
+        raise SystemExit(proc.returncode)
+    payload = json.loads(proc.stdout)
+    links = payload.get("data", [])
+    if verbosity >= 0:
+        print(f"fetched {len(links)} links", file=sys.stderr, flush=True)
+    return links
+
+
+def build_entry(link: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": link.get("id", ""),
+        "url": link.get("url", ""),
+        "title": link.get("title", ""),
+        "tags": link.get("tags") or [],
+        "starred": link.get("starred", False),
+        "highlighted": link.get("highlighted", False),
+        "read_at": link.get("readAt"),
+        "word_count": link.get("wordCount"),
+        "added_at": link.get("addedAt"),
+    }
+
+
+def resolve_entry(
+    entry: dict[str, Any], timeout: float, want_canonical: bool
+) -> dict[str, Any]:
+    url = entry["url"]
+    entry["resolved_url"] = url
+    if want_canonical:
+        entry["canonical_url"] = url
+
+    if not url or url.lower().startswith("mailto:"):
+        return entry
+
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            entry["resolved_url"] = resp.geturl()
+            if want_canonical:
+                entry["canonical_url"] = entry["resolved_url"]
+                body = resp.read(MAX_CANONICAL_BODY_BYTES)
+                charset = resp.headers.get_content_charset() or "utf-8"
+                html = body.decode(charset, errors="replace")
+                href = extract_canonical(html)
+                if href:
+                    entry["canonical_url"] = urljoin(entry["resolved_url"], href)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        # Unresolvable links (dead, timed out) can't be grouped by redirect
+        # target; check-links already covers those separately.
+        pass
+    except Exception:  # noqa: BLE001 - one bad link must not abort the run
+        pass
+
+    return entry
+
+
+def resolve_entries(
+    entries: list[dict[str, Any]],
+    workers: int,
+    timeout: float,
+    verbosity: int,
+    want_canonical: bool,
+) -> list[dict[str, Any]]:
+    if verbosity >= 0:
+        label = "canonical urls" if want_canonical else "redirects"
+        print(f"resolving {label}...", file=sys.stderr, flush=True)
+    resolved: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(resolve_entry, entry, timeout, want_canonical)
+            for entry in entries
+        ]
+        for future in as_completed(futures):
+            entry = future.result()
+            resolved.append(entry)
+            if verbosity > 0:
+                target = entry["canonical_url"] if want_canonical else entry["resolved_url"]
+                changed = target != entry["url"]
+                suffix = f" -> {target}" if changed else ""
+                print(f"{entry['url']}{suffix}", file=sys.stderr, flush=True)
+            elif verbosity == 0:
+                print(".", end="", file=sys.stderr, flush=True)
+    if verbosity == 0:
+        print(file=sys.stderr)
+    return resolved
+
+
+def fetch_highlight_count(link_id: str) -> int:
+    cmd = [
+        "goodlinksctl",
+        "--json",
+        "highlights",
+        "list",
+        "--link-id",
+        link_id,
+        "--all-pages",
+    ]
+    proc = run(cmd)
+    if proc.returncode != 0:
+        return 0
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return 0
+    return len(payload.get("data", []))
+
+
+def annotate_highlight_counts(
+    groups: list[list[dict[str, Any]]], workers: int, verbosity: int
+) -> None:
+    ids = [entry["id"] for group in groups for entry in group if entry["id"]]
+    if not ids:
+        return
+    if verbosity >= 0:
+        print(f"checking highlights for {len(ids)} duplicate links...", file=sys.stderr, flush=True)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        counts = dict(zip(ids, pool.map(fetch_highlight_count, ids)))
+    for group in groups:
+        for entry in group:
+            entry["highlight_count"] = counts.get(entry["id"], 0)
+
+
+def group_by_key(
+    entries: list[dict[str, Any]], key: str
+) -> list[list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for entry in entries:
+        groups[entry[key]].append(entry)
+    return [grp for grp in groups.values() if len(grp) > 1]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "-r",
+        "--follow-redirects",
+        action="store_true",
+        help="also resolve redirects over HTTP and group by the resolved URL (slower, network-dependent)",
+    )
+    parser.add_argument(
+        "-c",
+        "--canonical",
+        action="store_true",
+        help="group by each page's <link rel=canonical> URL instead (implies "
+        "--follow-redirects; falls back to the resolved URL when no "
+        "canonical tag is found)",
+    )
+    parser.add_argument(
+        "-j",
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"parallel checks with --follow-redirects (default: {DEFAULT_WORKERS})",
+    )
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-request timeout in seconds with --follow-redirects (default: {DEFAULT_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="emit one JSON object per group"
+    )
+    parser.add_argument(
+        "-v",
+        dest="verbosity",
+        action="count",
+        default=0,
+        help="print each url as it's checked instead of a progress dot",
+    )
+    parser.add_argument(
+        "-q",
+        dest="quiet",
+        action="count",
+        default=0,
+        help="suppress progress output (summary still printed)",
+    )
+    args = parser.parse_args()
+    verbosity = args.verbosity - args.quiet
+
+    links = fetch_links(verbosity)
+    entries = [build_entry(link) for link in links]
+
+    follow_redirects = args.follow_redirects or args.canonical
+    if follow_redirects:
+        entries = resolve_entries(
+            entries, args.workers, args.timeout, verbosity, args.canonical
+        )
+        group_key = "canonical_url" if args.canonical else "resolved_url"
+    else:
+        group_key = "url"
+
+    groups = group_by_key(entries, group_key)
+    groups.sort(key=lambda grp: grp[0][group_key])
+    annotate_highlight_counts(groups, args.workers, verbosity)
+
+    for group in groups:
+        if args.json:
+            print(json.dumps({"url": group[0][group_key], "entries": group}))
+        else:
+            for entry in group:
+                meta = (
+                    f"tags={','.join(entry['tags']) or '-'}"
+                    f" starred={entry['starred']}"
+                    f" highlights={entry.get('highlight_count', 0)}"
+                    f" read={'yes' if entry['read_at'] else 'no'}"
+                    f" words={entry['word_count'] if entry['word_count'] is not None else '-'}"
+                    f" added={entry['added_at'] or '-'}"
+                )
+                columns = [entry["id"], entry["url"]]
+                if follow_redirects and entry["resolved_url"] != entry["url"]:
+                    columns.append(entry["resolved_url"])
+                if (
+                    args.canonical
+                    and entry["canonical_url"] not in (entry["url"], entry["resolved_url"])
+                ):
+                    columns.append(entry["canonical_url"])
+                columns += [entry["title"], meta]
+                print("\t".join(columns))
+            print()
+
+    print(
+        f"summary\tchecked={len(entries)}\tgroups={len(groups)}",
+        file=sys.stderr,
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
