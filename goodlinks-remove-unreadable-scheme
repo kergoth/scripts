@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Remove GoodLinks links whose URL is a mailto: link.
+"""Remove GoodLinks links whose URL scheme GoodLinks can't render.
 
-Clicking a mailto: link in the GoodLinks app opens Mail instead of showing
-content, so these are junk saves rather than readable links.
+GoodLinks renders http:/https: URLs in-app. Any other scheme (mailto:,
+tel:, sms:, facetime:, itms-apps:, market:, ...) hands off to another app
+instead of showing content, so these are junk saves rather than readable
+links.
 
 Dry-run by default; pass --apply to actually delete via goodlinksctl.
 """
@@ -14,6 +16,9 @@ import json
 import subprocess
 import sys
 from typing import Any
+from urllib.parse import urlsplit
+
+READABLE_SCHEMES = {"http", "https"}
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -30,8 +35,12 @@ def fetch_links() -> list[dict[str, Any]]:
     return payload.get("data", [])
 
 
-def is_mailto(link: dict[str, Any]) -> bool:
-    return str(link.get("url", "")).lower().startswith("mailto:")
+def scheme_of(link: dict[str, Any]) -> str:
+    return urlsplit(str(link.get("url", ""))).scheme.lower()
+
+
+def has_unreadable_scheme(link: dict[str, Any]) -> bool:
+    return scheme_of(link) not in READABLE_SCHEMES
 
 
 def delete(ids: list[str]) -> int:
@@ -69,9 +78,9 @@ def main() -> int:
     args = parser.parse_args()
 
     links = fetch_links()
-    pending = [link for link in links if is_mailto(link)]
+    pending = [link for link in links if has_unreadable_scheme(link)]
     for link in pending:
-        print(f"{link['id']}\t{link.get('url', '')}\t{link.get('title', '')}")
+        print(f"{link['id']}\t{scheme_of(link)}\t{link.get('url', '')}\t{link.get('title', '')}")
 
     mode = "apply" if args.apply else "dry-run"
     print(f"summary\tmode={mode}\tmatched={len(pending)}")

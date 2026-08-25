@@ -342,6 +342,12 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **pinboard-add** [bash, -h]: Add URL to Pinboard with tags/title/description options.
 - **update-gist-generic** [bash, -h]: Update a github gist file from stdin or file.
 
+## GoodLinks maintenance (`goodlinks-*`)
+- **goodlinks-autotag** [python, argparse]: Auto-tag GoodLinks links by URL host, driven by a rule table. Dry-run by default; `--apply` writes tags via `goodlinksctl`.
+- **goodlinks-maintain** [sh, -h]: Run all GoodLinks maintenance passes: autotag, mark read-invariant tags read, remove links with unreadable URL schemes.
+- **goodlinks-mark-invariant-read** [python, argparse]: Mark GoodLinks links read when tagged with a read-invariant tag (e.g. reference). Dry-run by default; `--apply` writes.
+- **goodlinks-remove-unreadable-scheme** [python, argparse]: Remove GoodLinks links whose URL scheme GoodLinks can't render (mailto:, tel:, sms:, etc. — junk saves that hand off to another app). Dry-run by default; `--apply` deletes.
+
 ## Reading / Reader / personal info (`reader-tools`, `reader-views`, `ssa-total-earnings`, `ofxdate`, `canonical-url`)
 - **canonical-url** [bash, -h]: Print the canonical URL for each given URL (dedupe-friendly).
 - **ofxdate** [python, none]: Print end_date of OFX/QFX statement file as Unix epoch.

@@ -5,7 +5,8 @@ set -euo pipefail
 #
 # Run all GoodLinks library maintenance passes: autotag by URL host, mark
 # read any link tagged with a read-invariant tag (e.g. reference), and
-# remove mailto: links (they open Mail instead of showing content).
+# remove links with a URL scheme GoodLinks can't render (mailto:, tel:,
+# etc. hand off to another app instead of showing content).
 # Dry-run by default; each pass reports what it would change.
 #
 # Options:
@@ -46,7 +47,7 @@ main() {
 
     goodlinks-autotag "${flag[@]}"
     goodlinks-mark-invariant-read "${flag[@]}"
-    goodlinks-remove-mailto "${flag[@]}"
+    goodlinks-remove-unreadable-scheme "${flag[@]}"
 }
 
 main "$@"
