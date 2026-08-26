@@ -48,7 +48,7 @@ canonical() {
     if ! body=$(curl -fsSL -- "$url" 2>/dev/null); then
         return 2
     fi
-    result=$(printf '%s' "$body" | nixrun pup head 'link[rel="canonical"]' 'attr{href}')
+    result=$(printf '%s' "$body" | nixrun pup head 'link[rel="canonical"]' 'attr{href}' | head -n 1)
     if [ -z "$result" ]; then
         return 1
     fi
