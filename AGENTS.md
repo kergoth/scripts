@@ -309,7 +309,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **wsl-notify** [sh, none]: Send a Windows BurntToast notification from WSL.
 - **wslpath** [sh, none]: Print WSL `/bin/wslpath` usage and forward args.
 
-## Text / line helpers (`first-to-last`, `group-by-column`, `nlxargs`, `printargs`, `printcmd`, `quote-args`, `select-random`, `sponge`, `startswith`, `strip-color-codes`, `strip-emoji`, `sum`, `uniq-seen`, `uniq-seen-last`, `xargs-paste`, `glob-to-regex`, `urljoin`, `extract-md-links`, `pup-links`, `grab-links`)
+## Text / line helpers (`first-to-last`, `group-by-column`, `nlxargs`, `printargs`, `printcmd`, `quote-args`, `select-random`, `sponge`, `startswith`, `strip-color-codes`, `strip-emoji`, `sum`, `uniq-seen`, `uniq-seen-last`, `xargs-paste`, `glob-to-regex`, `urljoin`, `urlencode`, `urldecode`, `extract-md-links`, `pup-links`, `grab-links`)
 - **extract-md-links** [sh, -h]: Extract links from markdown via cmark + pup.
 - **first-to-last** [bash, none]: Move arg1 to end (xargs convenience).
 - **glob-to-regex** [python, argparse]: Translate glob patterns to regex.
@@ -328,6 +328,8 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **sum** [sh, none]: `awk '{s+=$1}END{print s}'`.
 - **uniq-seen** [sh, none]: `huniq` if available, else `awk !visited[$0]++`.
 - **uniq-seen-last** [sh, none]: uniq-seen reversed (keep last occurrence).
+- **urldecode** [python, none]: `urllib.parse.unquote` each arg, or each stdin line.
+- **urlencode** [python, none]: `urllib.parse.quote` each arg, or each stdin line.
 - **urljoin** [python, none]: `urllib.parse.urljoin(base, url)`.
 - **xargs-paste** [sh, none]: Run command per stdin line, paste output as second column.
 
