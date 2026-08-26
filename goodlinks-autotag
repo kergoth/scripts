@@ -1,7 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["platformdirs"]
+# ///
 """Auto-tag GoodLinks links by URL host, driven by a rule table.
 
-Dry-run by default; pass --apply to actually write tags via goodlinksctl.
+Rules load from a TOML config file (see --config for the default path;
+run with no config present to print the expected format). Dry-run by
+default; pass --apply to actually write tags via goodlinksctl.
 """
 
 from __future__ import annotations
@@ -11,10 +17,35 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
+
+from platformdirs import user_config_path
+
+CONFIG_PATH = user_config_path("goodlinks") / "autotag.toml"
+
+SAMPLE_CONFIG = """\
+# tags in this list are mutually exclusive per link: a rule won't add
+# one if the link already has a different tag from this set
+exclusive_tags = ["reference", "to-watch", "to-do", "to-be-read"]
+
+[[rule]]
+hosts = ["github.com"]
+tags = ["to-do"]
+
+[[rule]]
+hosts = ["youtube.com", "youtu.be"]
+tags = ["to-watch"]
+exclude_path = "/(channel|c|user)/|/@"
+
+[[rule]]
+hosts = ["youtube.com", "youtu.be"]
+tags = ["to-subscribe"]
+include_path = "/(channel|c|user)/|/@"
+"""
 
 
 @dataclass(frozen=True)
@@ -47,48 +78,28 @@ class Rule:
         return True
 
 
-YOUTUBE_HOSTS = {"youtube.com", "youtu.be"}
-YOUTUBE_CHANNEL_RE = re.compile(r"/(channel|c|user)/|/@")
+def load_config(path: Any) -> tuple[list[Rule], set[str]]:
+    if not path.exists():
+        sys.stderr.write(
+            f"warning: no config file at {path}; nothing to do.\n"
+            "sample config:\n\n" + SAMPLE_CONFIG
+        )
+        return [], set()
 
-RULES: list[Rule] = [
-    Rule({"github.com"}, {"to-do"}),
-    Rule({"amazon.com"}, {"to-buy"}),
-    Rule(
-        {
-            "barnesandnoble.com",
-            "goodreads.com",
-            "leanpub.com",
-            "bookshop.org",
-            "macmillan.com",
-        },
-        {"to-be-read"},
-    ),
-    Rule({"standardebooks.org"}, {"to-do"}),
-    Rule({"pypi.org"}, {"to-do"}),
-    Rule({"python.org", "pypi.org"}, {"python"}),
-    Rule({"dailydad.com"}, {"parenting"}),
-    Rule({"dailydad.com"}, {"philosophy"}),
-    Rule({"ryanholiday.net"}, {"philosophy"}),
-    Rule({"dailystoic.com"}, {"philosophy"}),
-    Rule(YOUTUBE_HOSTS, {"to-watch"}, exclude_path=YOUTUBE_CHANNEL_RE),
-    Rule(YOUTUBE_HOSTS, {"to-subscribe"}, include_path=YOUTUBE_CHANNEL_RE),
-]
+    with path.open("rb") as f:
+        data = tomllib.load(f)
 
-# Exclusive tags are mutually exclusive; don't add a host-based exclusive
-# tag to a link someone has already deliberately placed in a different one.
-EXCLUSIVE_TAGS = {
-    "reference",
-    "to-watch",
-    "to-do",
-    "to-be-read",
-    "to-subscribe",
-    "to-buy",
-    "to-sift",
-    "to-listen",
-    "to-share",
-    "to-remove",
-    "to-triage",
-}
+    rules = [
+        Rule(
+            hosts=r["hosts"],
+            tags=r["tags"],
+            include_path=re.compile(r["include_path"]) if "include_path" in r else None,
+            exclude_path=re.compile(r["exclude_path"]) if "exclude_path" in r else None,
+        )
+        for r in data.get("rule", [])
+    ]
+    exclusive_tags = set(data.get("exclusive_tags", []))
+    return rules, exclusive_tags
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -110,20 +121,20 @@ def host_of(url: str) -> str:
     return host.removeprefix("www.")
 
 
-def tags_to_add(link: dict[str, Any]) -> list[str]:
+def tags_to_add(link: dict[str, Any], rules: list[Rule], exclusive_tags: set[str]) -> list[str]:
     url = str(link.get("url", ""))
     host = host_of(url)
     existing = {str(t) for t in link.get("tags") or []}
-    has_exclusive_tag = bool(existing & EXCLUSIVE_TAGS)
+    has_exclusive_tag = bool(existing & exclusive_tags)
 
     tags: list[str] = []
-    for rule in RULES:
+    for rule in rules:
         if not rule.matches(host, url):
             continue
         for tag in rule.tags:
             if tag in existing or tag in tags:
                 continue
-            if has_exclusive_tag and tag in EXCLUSIVE_TAGS:
+            if has_exclusive_tag and tag in exclusive_tags:
                 continue
             tags.append(tag)
 
@@ -151,12 +162,22 @@ def main() -> int:
     parser.add_argument(
         "--apply", action="store_true", help="Write tags instead of dry-run"
     )
+    parser.add_argument(
+        "--config",
+        default=CONFIG_PATH,
+        type=type(CONFIG_PATH),
+        help=f"Path to rules config (default: {CONFIG_PATH})",
+    )
     args = parser.parse_args()
+
+    rules, exclusive_tags = load_config(args.config)
+    if not rules:
+        return 0
 
     links = fetch_links()
     pending = []
     for link in links:
-        add = tags_to_add(link)
+        add = tags_to_add(link, rules, exclusive_tags)
         if not add:
             continue
         pending.append({"id": link["id"], "addedTags": add})
