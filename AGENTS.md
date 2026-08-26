@@ -353,8 +353,9 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **goodlinks-migrate-link** [python, argparse]: Recreate a dead GoodLinks link at a new URL, carrying metadata over and cross-linking old/new entries. Dry-run by default; `--apply` writes. Never deletes the old entry.
 - **goodlinks-remove-unreadable-scheme** [python, argparse]: Remove GoodLinks links whose URL scheme GoodLinks can't render (mailto:, tel:, sms:, etc. — junk saves that hand off to another app). Dry-run by default; `--apply` deletes.
 
-## Reading / Reader / personal info (`reader-tools`, `reader-views`, `ssa-total-earnings`, `ofxdate`, `canonical-url`)
+## Reading / Reader / personal info (`reader-tools`, `reader-views`, `ssa-total-earnings`, `ofxdate`, `canonical-url`, `favicon-url`)
 - **canonical-url** [bash, -h]: Print the canonical URL for each given URL (dedupe-friendly).
+- **favicon-url** [bash, -h]: Print the favicon URL for each given URL, falling back to `/favicon.ico`.
 - **ofxdate** [python, none]: Print end_date of OFX/QFX statement file as Unix epoch.
 - **reader-tools** [python (uv), argparse]: Readwise Reader library maintenance: `dedupe`, `stats`, `check-links`, `tag-check-links`, `newsletter-inventory` subcommands.
 - **reader-views** [bash, none]: List of personal reader-tag categories (data file as script).

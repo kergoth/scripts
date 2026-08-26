@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Usage: favicon-url [options] [URL..]
+#
+# For each url, print the favicon url, or nothing.
+# Checks <link rel="icon|shortcut icon|apple-touch-icon"> first, falling
+# back to /favicon.ico at the site root if none are declared or reachable.
+# Without -k, immediately exits for a failure to obtain a favicon url.
+# Exit code is 1 for a failure to determine a favicon url, 2 for a failure
+# to fetch a url, otherwise 0.
+#
+# Options:
+#     -k          Continue as much as possible after an error
+#     -q          Suppress per-url failure messages
+#     -h, --help  Show this help message
+
+set -euo pipefail
+
+usage() {
+    sed -n '/^# Usage:/,/^# *-h/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+msg() {
+    local fmt=$1
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+maybe_die() {
+    local code=$1
+    shift
+    if [ "$quiet" -eq 0 ]; then
+        msg "$@"
+    fi
+    if [ "$continue" -eq 0 ]; then
+        exit "$code"
+    fi
+}
+
+nixrun() {
+    local nixpkg=$1
+    shift
+    nix run "nixpkgs#$nixpkg" -- "$@"
+}
+
+favicon_from_html() {
+    local body=$1 selector result
+    for selector in 'link[rel="icon"]' 'link[rel="shortcut icon"]' 'link[rel="apple-touch-icon"]'; do
+        result=$(printf '%s' "$body" | nixrun pup head "$selector" 'attr{href}' | head -n 1)
+        if [ -n "$result" ]; then
+            printf '%s\n' "$result"
+            return 0
+        fi
+    done
+    return 1
+}
+
+favicon() {
+    local url=$1 body origin result fallback
+    if ! body=$(curl -fsSL -- "$url" 2>/dev/null); then
+        return 2
+    fi
+
+    if result=$(favicon_from_html "$body"); then
+        urljoin "$url" "$result"
+        return 0
+    fi
+
+    origin=$(printf '%s' "$url" | sed -E 's#^(https?://[^/]+).*#\1#')
+    fallback="$origin/favicon.ico"
+    if curl -fsSL -o /dev/null -- "$fallback" 2>/dev/null; then
+        printf '%s\n' "$fallback"
+        return 0
+    fi
+
+    return 1
+}
+
+process_arguments() {
+    continue=0
+    quiet=0
+    local opt
+    while getopts kqh-: opt; do
+        case "$opt" in
+            k)
+                continue=1
+                ;;
+            q)
+                quiet=1
+                ;;
+            h)
+                usage
+                exit 0
+                ;;
+            -)
+                case "$OPTARG" in
+                    help)
+                        usage
+                        exit 0
+                        ;;
+                    *)
+                        msg "Unknown option --%s" "$OPTARG"
+                        usage >&2
+                        exit 2
+                        ;;
+                esac
+                ;;
+            \?)
+                usage >&2
+                exit 2
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    urls=("$@")
+}
+
+main() {
+    process_arguments "$@"
+
+    local url favicon_url ret
+    for url in "${urls[@]}"; do
+        ret=0
+        favicon_url=$(favicon "$url") || ret=$?
+        if [ "$ret" -ne 0 ]; then
+            if [ "$ret" -eq 2 ]; then
+                maybe_die 2 "Failed to fetch %s" "$url"
+            else
+                maybe_die 1 "Failed to determine favicon url for %s" "$url"
+            fi
+            continue
+        fi
+        printf '%s\n' "$favicon_url"
+    done
+}
+
+main "$@"
