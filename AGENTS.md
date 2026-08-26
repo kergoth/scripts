@@ -197,7 +197,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **tmux-toggle-float** [sh, none]: Toggle a tmux floating window via the float plugin.
 - **tmx** [sh, -h]: Create/list/kill tmux session groups.
 
-## macOS-only (`osx-*`, `darkmode`, `cleaneject`, `mkalias`, `mdfind-all`, `cd-rip`, `cdr2iso`, `cue-rip`, `bin2iso`, `bmaptool-sd`, `ddimage-sd`, `download-ted-talk`, `duti-*`, `firefox-*`, `get-webloc-url`, `icns-to-png`, `list-mac-apps`, `metadate`, `new-webloc`, `recreate-iso`, `safari-webapp-cache-clean`, `setfiledate`, `creationdate`)
+## macOS-only (`osx-*`, `darkmode`, `cleaneject`, `mkalias`, `mdfind-all`, `cd-rip`, `cdr2iso`, `cue-rip`, `bin2iso`, `bmaptool-sd`, `ddimage-sd`, `download-ted-talk`, `duti-*`, `firefox-*`, `get-webloc-url`, `icns-to-png`, `list-mac-apps`, `metadate`, `new-webloc`, `recreate-iso`, `safari-webapp-cache-clean`, `setfiledate`, `setfile-create-date`, `creationdate`)
 - **bmaptool-sd** [sh, none]: Run bmaptool against macOS internal SD card reader.
 - **bin2iso** [sh, none]: Convert .bin/.cue or .toc to ISO via bchunk.
 - **cd-rip** [sh, -h]: Rip a CD using diskutil-detected device.
@@ -228,6 +228,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **osx-reset-launchpad** [sh, none]: Reset Launchpad layout and restart Dock.
 - **recreate-iso** [python, argparse]: Recreate ISO from extracted contents preserving metadata.
 - **safari-webapp-cache-clean** [bash, -h]: Clean Safari web app caches. **DESTRUCTIVE**.
+- **setfile-create-date** [python, -h]: Set only file creation date from a unix timestamp, leaving modification date untouched.
 - **setfiledate** [bash, -h]: Set file dates from a unix timestamp argument.
 
 ## Linux/Debian/Arch/FreeBSD pkg utilities (`pacman-*`, `dpkg-sizes`, `pkg-sizes`, `ipk*`)
@@ -261,7 +262,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **devpod-stop** [bash, -h]: Parallel-stop DevPod workspaces with escalating fallback.
 - **distrobox-create-chimera** [bash, none]: Create a chimera distrobox with mount/doas pre-init.
 
-## Path / filesystem helpers (`abs_readlink`, `abspath`, `normpath`, `relpath`, `path_join`, `dead-symlinks`, `dirinfo`, `find-newest`, `find-oldest`, `lstree`, `newest`, `oldest`, `remove-empty-dirs`, `resolve-alias`, `resolvelink`, `resolvelinks`, `datefind`)
+## Path / filesystem helpers (`abs_readlink`, `abspath`, `normpath`, `relpath`, `path_join`, `dead-symlinks`, `dirinfo`, `find-newest`, `find-oldest`, `iln`, `lstree`, `mvd`, `newest`, `oldest`, `remove-empty-dirs`, `resolve-alias`, `resolvelink`, `resolvelinks`, `datefind`)
 - **abs_readlink** [sh, none]: Print absolute path of symlink target(s).
 - **abspath** [sh, -h]: Print absolute version of each PATH (relative-to override).
 - **datefind** [bash, -h]: List files (find arguments) annotated with dates.
@@ -269,7 +270,9 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **dirinfo** [bash, -h]: Print summary info for a directory.
 - **find-newest** [bash, none]: Walk find tree printing newest file by mtime.
 - **find-oldest** [bash, none]: Walk find tree printing oldest file by mtime.
+- **iln** [bash, -h]: Interactive `ln` with backup-on-overwrite and move-and-link-back modes.
 - **lstree** [sh, none]: Indented tree-like listing without box-drawing characters.
+- **mvd** [sh, -h]: `mv` (or `git mv` as `git-mvd`) that creates missing leading destination directories.
 - **newest** [bash, none]: Newest file via `datefind -r | head -n1`.
 - **normpath** [sh, none]: Print canonical form of a path (no symlinks resolved).
 - **oldest** [bash, none]: Oldest file via `datefind | head -n1`.
