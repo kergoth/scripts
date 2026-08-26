@@ -344,6 +344,9 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **pinboard-add** [bash, -h]: Add URL to Pinboard with tags/title/description options.
 - **update-gist-generic** [bash, -h]: Update a github gist file from stdin or file.
 
+## Calibre (`calibre-*`)
+- **calibre-merge-asin-dupes** [python, argparse]: Merge duplicate calibre books sharing a mobi-asin identifier; keeps the rated entry, copies unique formats over, removes losers. Dry-run by default; `--execute` writes. Calibre must not be running. **DESTRUCTIVE** on `--execute`.
+
 ## GoodLinks maintenance (`goodlinks-*`)
 - **goodlinks-autotag** [python, argparse]: Auto-tag GoodLinks links by URL host, driven by a rule table. Dry-run by default; `--apply` writes tags via `goodlinksctl`.
 - **goodlinks-check-links** [python, argparse]: Check GoodLinks source URLs for dead or error responses. Read-only; pipe `--json` failures into `goodlinksctl` to tag them.
