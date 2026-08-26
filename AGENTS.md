@@ -8,6 +8,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - Scripts marked **DESTRUCTIVE** mutate the filesystem, packages, or remote state without prompting; review source before invoking.
 - One logical change per commit. Recent history uses "Add X" / "Add X wrapper" subjects for new scripts; describe the actual change for modifications.
 - Older scripts (most `bb-*`, `brew-*`, etc.) often don't intercept help flags. Newer scripts (model wrappers, build helpers, recent additions) standardize on `-h` or `-h/--help`.
+- **Keep inventory current.** Adding, removing, or materially changing a script's behavior (help handling, destructiveness, purpose) means updating its inventory entry (or adding/removing one) in the same commit — don't let this file drift from what's on disk.
 
 ## Inventory notation
 `[type, help]` per script.
