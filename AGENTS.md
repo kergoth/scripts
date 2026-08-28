@@ -378,7 +378,7 @@ Personal scripts and small utilities. This directory is a git repository, tracke
 - **getch** [python, none]: Read one char with `readchar`.
 - **link-xcode-sdks** [sh, -h]: Symlink old SDKs into Xcode after upgrade.
 - **kcompile.py** [python, none]: Helpers for compiling Python from strings (used by csvpyrow).
-- **llm-server** [bash, -h]: Manage SwiftLM-backed local LLM model servers (start/stop/status).
+- **llm-server** [bash, -h]: Manage one active local LLM server, switch physical models, and expose shared Pi inference presets.
 - **parse_zsh_startup** [python (py2), none]: Parse zsh startup profile log.
 - **repo-outgoing** [sh, none]: `repo forall` showing outgoing commits per project.
 - **repo-uncontrolled** [sh, none]: Show directories not present in `repo list`.

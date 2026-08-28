@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Usage: llm-server [-B backend] [-s state_dir] [options] command [model] [args]
 #
-# Manage multiple local OpenAI-compatible model servers for coding and research.
+# Manage one active local OpenAI-compatible model server for agents and chat.
 #
 # Commands:
-#     list                    List configured model profiles
-#     start <model|all>       Start one model server or all
+#     list                    List configured physical model profiles
+#     start <model>           Start one model server
+#     switch <model>          Stop the active managed server and start another
 #     stop <model|all>        Stop one model server or all
-#     restart <model|all>     Restart one model server or all
+#     restart <model>         Restart one model server
 #     status [model|all]      Show status for one model or all (default: all)
 #     is-running <model>      Exit 0 when model is running, 1 when not running
 #     logs <model> [lines]    Show log output for model (default: 40 lines)
@@ -40,8 +41,7 @@ command_arg=
 doctor_deep=0
 cmd=()
 
-
-model_names=("quick" "coder" "reason" "reason-long")
+model_names=("agent" "assistant" "quality")
 
 usage() {
     sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
@@ -181,29 +181,23 @@ model_config() {
     model_vllm_mlx_args=()
     model_swiftlm_args=()
     case "$name" in
-        quick)
-            model_id="mlx-community/Qwen3-4B-Instruct-2507-4bit"
-            model_port="5415"
-            model_vllm_mlx_args=(--max-kv-size 32768 --max-num-seqs 1 --enable-auto-tool-choice --tool-call-parser qwen)
-            model_swiftlm_args=(--ctx-size 32768 --parallel 1)
-            ;;
-        coder)
-            model_id="mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
-            model_port="5414"
-            model_vllm_mlx_args=(--max-kv-size 32768 --max-num-seqs 1 --enable-auto-tool-choice --tool-call-parser qwen3_coder)
-            model_swiftlm_args=(--ctx-size 32768 --parallel 1)
-            ;;
-        reason)
+        agent)
             model_id="mlx-community/Qwen3.6-35B-A3B-4bit"
             model_port="5413"
-            model_vllm_mlx_args=(--max-kv-size 32768 --max-num-seqs 1 --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":true}' --enable-auto-tool-choice --tool-call-parser qwen)
-            model_swiftlm_args=(--thinking --ctx-size 32768 --parallel 1)
+            model_vllm_mlx_args=(--max-kv-size 65536 --cache-memory-mb 2048 --max-num-seqs 1 --default-chat-template-kwargs '{"enable_thinking":false}' --enable-auto-tool-choice --tool-call-parser qwen --reasoning-parser qwen3)
+            model_swiftlm_args=(--ctx-size 65536 --parallel 1 --turbo-kv)
             ;;
-        reason-long)
-            model_id="mlx-community/Qwen3.6-35B-A3B-4bit"
-            model_port="5416"
-            model_vllm_mlx_args=(--max-kv-size 65536 --max-num-seqs 1 --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":true}' --enable-auto-tool-choice --tool-call-parser qwen)
-            model_swiftlm_args=(--thinking --ctx-size 65536 --parallel 1 --turbo-kv)
+        assistant)
+            model_id="mlx-community/gemma-4-26B-A4B-it-qat-4bit"
+            model_port="5413"
+            model_vllm_mlx_args=(--mllm --max-kv-size 32768 --cache-memory-mb 2048 --max-num-seqs 1 --default-chat-template-kwargs '{"enable_thinking":false}' --enable-auto-tool-choice --tool-call-parser gemma4 --reasoning-parser gemma4)
+            model_swiftlm_args=(--vision --ctx-size 32768 --parallel 1)
+            ;;
+        quality)
+            model_id="mlx-community/Qwen3.8-27B-4bit"
+            model_port="5413"
+            model_vllm_mlx_args=(--mllm --max-kv-size 32768 --cache-memory-mb 2048 --max-num-seqs 1 --default-chat-template-kwargs '{"enable_thinking":false}' --enable-auto-tool-choice --tool-call-parser qwen --reasoning-parser qwen3)
+            model_swiftlm_args=(--vision --ctx-size 32768 --parallel 1)
             ;;
         *)
             die "Unknown model profile: $name"
@@ -214,7 +208,7 @@ model_config() {
 selected_backend_for_current_model() {
     local backend=${backend_override:-$model_backend}
     case "$backend" in
-        vllm-mlx|swiftlm)
+        vllm-mlx | swiftlm)
             printf "%s\n" "$backend"
             ;;
         *)
@@ -373,6 +367,21 @@ owned_pid_for() {
     printf "%s\n" "$pid"
 }
 
+managed_profile_for_pid() {
+    local pid=$1
+    local name
+    local owned_pid
+
+    for name in "${model_names[@]}"; do
+        owned_pid=$(owned_pid_for "$name" 2>/dev/null || true)
+        if [ -n "$owned_pid" ] && [ "$owned_pid" = "$pid" ]; then
+            printf "%s\n" "$name"
+            return 0
+        fi
+    done
+    return 1
+}
+
 is_running_model() {
     local name=$1
     local pid
@@ -394,6 +403,7 @@ status_model() {
     local name=$1
     local pid
     local listener_pid
+    local listener_owner
 
     model_config "$name"
     cleanup_stale_pid_for "$name"
@@ -402,7 +412,12 @@ status_model() {
     listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
 
     if [ -n "$listener_pid" ] && { [ -z "$pid" ] || [ "$listener_pid" != "$pid" ]; }; then
-        printf "%s blocked pid=%s port=%s model=%s\n" "$name" "$listener_pid" "$model_port" "$model_id"
+        listener_owner=$(managed_profile_for_pid "$listener_pid" 2>/dev/null || true)
+        if [ -n "$listener_owner" ]; then
+            printf "%s stopped port=%s model=%s\n" "$name" "$model_port" "$model_id"
+        else
+            printf "%s blocked pid=%s port=%s model=%s\n" "$name" "$listener_pid" "$model_port" "$model_id"
+        fi
         return 1
     fi
 
@@ -428,11 +443,16 @@ start_model() {
 
     local owned_pid
     local listener_pid
+    local listener_owner
 
     owned_pid=$(owned_pid_for "$name" 2>/dev/null || true)
     listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
 
     if [ -n "$listener_pid" ] && { [ -z "$owned_pid" ] || [ "$listener_pid" != "$owned_pid" ]; }; then
+        listener_owner=$(managed_profile_for_pid "$listener_pid" 2>/dev/null || true)
+        if [ -n "$listener_owner" ]; then
+            die "%s is running; use switch %s to change physical models" "$listener_owner" "$name"
+        fi
         die "%s port %s is already used by unowned pid %s" "$name" "$model_port" "$listener_pid"
     fi
 
@@ -452,7 +472,7 @@ start_model() {
     log_file=$(log_file_for "$name")
     run touch "$log_file"
     if [ "$dry_run" -eq 0 ]; then
-        printf "\n[%s] Starting profile=%s backend=%s model=%s port=%s\n"             "$(date '+%Y-%m-%d %H:%M:%S')" "$name" "$(selected_backend_for_current_model)" "$model_id" "$model_port" >>"$log_file"
+        printf "\n[%s] Starting profile=%s backend=%s model=%s port=%s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$name" "$(selected_backend_for_current_model)" "$model_id" "$model_port" >>"$log_file"
     fi
 
     if [ "$verbosity" -gt 0 ]; then
@@ -505,12 +525,16 @@ stop_model() {
 
     local pid
     local listener_pid
+    local listener_owner
     pid=$(owned_pid_for "$name" 2>/dev/null || true)
     listener_pid=$(listener_pid_for "$name" 2>/dev/null || true)
 
     if [ -z "$pid" ]; then
         if [ -n "$listener_pid" ]; then
-            die "%s port %s is used by unowned pid %s; refusing to stop it" "$name" "$model_port" "$listener_pid"
+            listener_owner=$(managed_profile_for_pid "$listener_pid" 2>/dev/null || true)
+            if [ -z "$listener_owner" ]; then
+                die "%s port %s is used by unowned pid %s; refusing to stop it" "$name" "$model_port" "$listener_pid"
+            fi
         fi
         msg_yellow "%s is not running" "$name"
         clear_state_for "$name"
@@ -547,7 +571,6 @@ stop_model() {
     msg_green "%s stopped" "$name"
 }
 
-
 for_each_target() {
     local target=$1
     local fn=$2
@@ -573,7 +596,33 @@ cmd_list() {
 }
 
 cmd_start() {
+    [ "$command_model" != "all" ] || die "start requires one physical model; use switch to change models"
     for_each_target "$command_model" start_model
+}
+
+cmd_switch() {
+    local target=$command_model
+    local name
+    local pid
+
+    [ "$target" != "all" ] || die "switch requires one physical model"
+    is_known_model "$target" || die "Unknown model profile: $target"
+
+    for name in "${model_names[@]}"; do
+        pid=$(owned_pid_for "$name" 2>/dev/null || true)
+        if [ -n "$pid" ]; then
+            if [ "$name" = "$target" ]; then
+                if is_running_model "$name"; then
+                    msg_yellow "%s already running (pid: %s)" "$name" "$pid"
+                else
+                    msg_yellow "%s already initializing (pid: %s)" "$name" "$pid"
+                fi
+                return 0
+            fi
+            stop_model "$name"
+        fi
+    done
+    start_model "$target"
 }
 
 cmd_stop() {
@@ -581,6 +630,7 @@ cmd_stop() {
 }
 
 cmd_restart() {
+    [ "$command_model" != "all" ] || die "restart requires one physical model"
     for_each_target "$command_model" stop_model
     for_each_target "$command_model" start_model
 }
@@ -726,6 +776,9 @@ main() {
             ;;
         start)
             cmd_start
+            ;;
+        switch)
+            cmd_switch
             ;;
         stop)
             cmd_stop
