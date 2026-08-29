@@ -386,3 +386,18 @@
 - **zed-selectenv** [bash, none]: Search common venv locations for Zed Python env selection.
 - **zed-sync-autoinstall** [bash, -h]: Sync installed Zed extensions to `auto_install_extensions`.
 
+## Dotfiles and package management
+- **chezmoi-diff-managed** [bash, --help]: Compare managed chezmoi targets to their rendered baselines.
+- **chezmoi-edit-encrypted** [sh, -h]: Decrypt, edit, and re-encrypt a chezmoi-managed file. **DESTRUCTIVE**.
+- **mas-check-pricing** [bash, -h]: Report pricing and optional in-app purchases for `mas` entries from files or stdin.
+- **brew-missing-cask-apps** [bash, -h]: Find installed casks whose app bundles are missing; `-c` uninstalls them. **DESTRUCTIVE**.
+- **brewfile-diff-dump** [bash, none]: Compare plain Brewfiles or stdin with `brew bundle dump`.
+- **brewfile-diff-installed** [bash, -h]: Compare plain Brewfiles or stdin with installed Homebrew packages.
+- **download-github-release** [bash, -h]: Download a selected GitHub release asset.
+- **arch-install-aur** [sh, none]: Build and install an Arch AUR package. **DESTRUCTIVE**.
+- **macos-install-clt** [bash, none]: Install macOS Command Line Tools. **DESTRUCTIVE**.
+- **macos-set-hostname** [sh, none]: Set macOS host, local host, and computer names. **DESTRUCTIVE**.
+- **macos-update-all** [sh, none]: Install available macOS software updates. **DESTRUCTIVE**.
+- **ludusavi-restic-backup** [bash, -h]: Back up Ludusavi saves to the configured Restic repository. **DESTRUCTIVE**.
+- **ludusavi-restic-restore** [bash, -h]: Restore Ludusavi saves from the configured Restic repository. **DESTRUCTIVE**.
+

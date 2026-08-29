@@ -1,0 +1,42 @@
+#!/bin/sh
+# Run Cram tests for ~/bin.
+#
+# Resolves a Bash >=4 interpreter for Cram's test shell, then runs the given
+# test paths or every test below this directory.
+
+set -eu
+
+script_dir=$(cd "$(dirname "$0")" && pwd)
+
+resolve_bash() {
+    for candidate in \
+        "$(command -v bash 2>/dev/null || true)" \
+        /opt/homebrew/bin/bash \
+        /usr/local/bin/bash \
+        "$HOME/.nix-profile/bin/bash" \
+        /nix/var/nix/profiles/default/bin/bash
+    do
+        [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+        # shellcheck disable=SC2016 # Expression expands in the child Bash process.
+        major=$("$candidate" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null || echo 0)
+        if [ "$major" -ge 4 ] 2>/dev/null; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+shell_args=
+if bash_path=$(resolve_bash); then
+    PATH="${bash_path%/*}:$PATH"
+    export PATH
+    shell_args="--shell=$bash_path"
+fi
+
+if [ $# -eq 0 ]; then
+    set -- "$script_dir"
+fi
+
+# shellcheck disable=SC2086 # shell_args is intentionally word-split
+exec uvx cram $shell_args "$@"

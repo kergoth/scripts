@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Given a Brewfile, compare the listed packages with the installed packages.
+
+# Usage: ./brewfile-diff-installed Brewfile
+
+set -euo pipefail
+
+read_brewfile() {
+    local brewfile=$1
+
+    if [ "$brewfile" = - ]; then
+        cat
+    elif [ -f "$brewfile" ]; then
+        cat "$brewfile"
+    else
+        echo >&2 "Brewfile not found: $brewfile"
+        return 1
+    fi
+}
+
+usage() {
+    echo >&2 "${0##*/} [options] Brewfile [Brewfile..]"
+    exit 2
+}
+
+diff_highlight() {
+    if [ -t 1 ]; then
+        if command -v delta &>/dev/null; then
+            delta --file-style=omit --hunk-header-style=omit
+        elif command -v diff-highlight >/dev/null 2>&1 && command -v perl >/dev/null 2>&1; then
+            diff-highlight
+        else
+            tail -n +3
+        fi
+    else
+        tail -n +3
+    fi
+}
+
+brewfiles_dump() {
+    for brewfile; do
+        if [ -d "$brewfile" ]; then
+            find "$brewfile" -type f -not -name .DS_Store -print0 |
+                while read -r brewfile; do
+                    read_brewfile "$brewfile"
+                done
+        else
+            read_brewfile "$brewfile"
+        fi
+    done
+}
+
+formula=
+cask=
+while getopts fch opt; do
+    case "$opt" in
+    f)
+        formula=1
+        ;;
+    c)
+        cask=1
+        ;;
+    \? | h)
+        usage
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ -z "$formula" ] && [ -z "$cask" ]; then
+    cask=1
+    formula=1
+fi
+
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+if ! command -v brew &>/dev/null; then
+    echo "Homebrew is not installed."
+    exit 1
+fi
+
+# Get installed packages
+if [ -n "$formula" ] && [ -n "$cask" ]; then
+    installed=$(brew list)
+else
+    installed=$(brew list ${formula:+--formula} ${cask:+--cask})
+fi
+
+# Get listed packages
+listed=$(brewfiles_dump "$@" | brew bundle list ${formula:+--formula} ${cask:+--cask} --file=-)
+
+# Compare listed and installed packages
+diff -ud <(echo "$listed" | sort) <(echo "$installed" | sort) | diff_highlight

@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Given plain Brewfiles, diff them against the current Homebrew configuration.
+#
+# Usage: brewfile-diff-dump Brewfile [Brewfile..]
+
+set -euo pipefail
+
+usage() {
+    echo >&2 "${0##*/} Brewfile [Brewfile..]"
+    exit 2
+}
+
+read_brewfile() {
+    local brewfile=$1
+
+    if [ "$brewfile" = - ]; then
+        cat
+    elif [ -f "$brewfile" ]; then
+        cat "$brewfile"
+    else
+        echo >&2 "Brewfile not found: $brewfile"
+        return 1
+    fi
+}
+
+brewfiles_content() {
+    local brewfile
+
+    for brewfile; do
+        if [ -d "$brewfile" ]; then
+            while IFS= read -r -d '' brewfile; do
+                read_brewfile "$brewfile"
+            done < <(find "$brewfile" -type f -not -name .DS_Store -print0)
+        else
+            read_brewfile "$brewfile"
+        fi
+    done
+}
+
+diff_highlight() {
+    if [ -t 1 ]; then
+        if command -v delta >/dev/null 2>&1; then
+            delta --file-style=omit --hunk-header-style=omit
+        elif command -v diff-highlight >/dev/null 2>&1 && command -v perl >/dev/null 2>&1; then
+            diff-highlight
+        else
+            cat
+        fi
+    else
+        cat
+    fi
+}
+
+main() {
+    if [ $# -eq 0 ]; then
+        usage
+    fi
+
+    if ! command -v brew >/dev/null 2>&1; then
+        echo >&2 "Homebrew is not installed."
+        exit 1
+    fi
+
+    export HOMEBREW_NO_AUTO_UPDATE=1
+
+    local content
+    local cask_args
+    content=$(brewfiles_content "$@")
+    cask_args=$(printf '%s\n' "$content" | sed -n '/^[[:space:]]*cask_args[[:space:]]/{p;q;}')
+
+    source_dump() {
+        if [ -n "$cask_args" ]; then
+            printf '%s\n\n' "$cask_args"
+        fi
+        printf '%s\n' "$content" |
+            sed -e '/^[[:space:]]*cask_args[[:space:]]/d' -e '/^#/d' -e '/^[[:space:]]*$/d' |
+            sort -uf
+    }
+
+    bundle_dump() {
+        if [ -n "$cask_args" ]; then
+            printf '%s\n\n' "$cask_args"
+        fi
+        brew bundle dump --file=- |
+            sed -e '/^[[:space:]]*cask_args[[:space:]]/d' -e '/^vscode/d' -e 's#, args: { appdir: "~/Applications" }##' -e '/^[[:space:]]*$/d' |
+            sort -uf
+    }
+
+    diff -ud <(source_dump) <(bundle_dump) | diff_highlight
+}
+
+main "$@"
