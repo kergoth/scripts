@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+# Usage: goodlinks-to-epub [options] [TITLE]
+#
+# Generate an epub from goodlinksctl JSON read on stdin. Fetches full article
+# content for each item and compiles them with pandoc (via nix run).
+#
+# TITLE is a fragment prepended to the newest article date in the epub title
+# (default: GoodLinks). Example: "Weekly", "Cooking Backlog", "Starred".
+#
+# Excludes already-read saves and, if ~/.config/goodlinks/schema.toml is
+# present, saves tagged with any exclusive_tags bucket tag. Without the
+# config, bucket tag filtering is skipped with a warning.
+#
+# Options:
+#     -d          Append the newest article date to the title
+#     -o OUTPUT   Output epub file (default: derived from title)
+#     -m          Validate epub with calibre and mark included articles as read
+#     -a          Add the resulting epub to calibre.
+#                 Obeys CALIBRE_LIBRARY, CALIBRE_LIBRARY_URL,
+#                 CALIBRE_LIBRARY_PATH, CALIBRE_USER, and CALIBRE_PASSWORD
+#                 environment variables. The path and url variants allow for
+#                 differing behavior depending on whether calibre is currently
+#                 running, as direct db access fails with calibre running.
+#     -n          Dry run, don't actually do anything
+#     -v          Increase verbosity, can be specified multiple times
+#     -q          Decrease verbosity, can be specified multiple times
+#     -h          Show this help message
+set -euo pipefail
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    output=
+    append_date=0
+    mark_read=0
+    add_to_calibre=0
+    dry_run=0
+    verbosity=0
+
+    while getopts 'do:manvqh' opt; do
+        case "$opt" in
+            d) append_date=1 ;;
+            o) output=$OPTARG ;;
+            m) mark_read=1 ;;
+            a) add_to_calibre=1 ;;
+            n) dry_run=1 ;;
+            v) verbosity=$((verbosity + 1)) ;;
+            q) verbosity=$((verbosity - 1)) ;;
+            h) show_help; exit 0 ;;
+            \?)
+                echo "Unknown option: -$OPTARG" >&2
+                show_help >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    title_fragment="${1:-}"
+
+    if [ $add_to_calibre -eq 1 ]; then
+        if [ -z "${CALIBRE_LIBRARY:-}" ]; then
+            if pgrep -i calibre >/dev/null 2>&1; then
+                if [ -z "${CALIBRE_LIBRARY_URL:-}" ]; then
+                    die "CALIBRE_LIBRARY or CALIBRE_LIBRARY_URL must be set for a running calibre"
+                fi
+                CALIBRE_LIBRARY="$CALIBRE_LIBRARY_URL"
+            else
+                if [ -z "${CALIBRE_LIBRARY_PATH:-}" ]; then
+                    die "CALIBRE_LIBRARY or CALIBRE_LIBRARY_PATH must be set"
+                fi
+                CALIBRE_LIBRARY="$CALIBRE_LIBRARY_PATH"
+            fi
+        fi
+        if [ -n "${CALIBRE_USER:-}" ] && [ -z "${CALIBRE_PASSWORD:-}" ]; then
+            die "CALIBRE_PASSWORD must be set if CALIBRE_USER is set"
+        fi
+    fi
+}
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg "error: %s" "$*"
+    exit 1
+}
+
+run() {
+    if [ "${dry_run:-0}" = "1" ] || [ "${verbosity:-0}" -gt 0 ]; then
+        printf '❯' >&2
+        printf ' %s' "$@" >&2
+        printf '\n' >&2
+    fi
+    if [ "${dry_run:-0}" != "1" ]; then
+        "$@"
+    fi
+}
+
+strip_frontmatter() {
+    awk '/^---$/ && !started { started=1; next }
+         /^---$/ && started && !done { done=1; next }
+         done { print }'
+}
+
+run_calibredb() {
+    if [ -n "${CALIBRE_USER:-}" ]; then
+        calibredb \
+            --with-library "$CALIBRE_LIBRARY" \
+            --username "$CALIBRE_USER" \
+            --password "$CALIBRE_PASSWORD" \
+            "$@"
+    else
+        calibredb \
+            --with-library "$CALIBRE_LIBRARY" \
+            "$@"
+    fi
+}
+
+add_epub_to_calibre() {
+    local title="$1"
+    local epub="$2"
+
+    run_calibredb add \
+        --title "$title" \
+        --authors "GoodLinks" \
+        --tags "GoodLinks" \
+        "$epub"
+}
+
+main() {
+    process_arguments "$@"
+
+    command -v goodlinksctl >/dev/null 2>&1 || die "goodlinksctl not found in PATH"
+    command -v jq >/dev/null 2>&1 || die "jq not found in PATH"
+    command -v nix >/dev/null 2>&1 || die "nix not found in PATH"
+    if [ "$mark_read" = "1" ]; then
+        command -v ebook-convert >/dev/null 2>&1 || die "ebook-convert (calibre) not found in PATH"
+    fi
+    if [ -t 0 ]; then
+        die "no input: pipe goodlinksctl JSON to stdin"
+    fi
+
+    # Read exclusive_tags from schema.toml to identify non-article saves.
+    # If the config is absent or unreadable, bucket tag filtering is skipped.
+    schema_toml="$HOME/.config/goodlinks/schema.toml"
+    ret=0
+    non_article_tags=$(python3 -c "
+import sys, json, tomllib
+cfg = tomllib.load(sys.stdin.buffer)
+if 'exclusive_tags' not in cfg:
+    sys.exit(1)
+print(json.dumps(cfg['exclusive_tags']))
+" <"$schema_toml" 2>/dev/null) || ret=$?
+    if [ "$ret" -ne 0 ] || [ -z "$non_article_tags" ]; then
+        msg "warning: %s missing or has no exclusive_tags — bucket tag filtering disabled" "$schema_toml"
+        non_article_tags='[]'
+    fi
+
+    msg_verbose "Reading article list from stdin..."
+    input_json=$(cat)
+
+    filtered=$(printf '%s' "$input_json" | jq \
+        --argjson exclude "$non_article_tags" \
+        '(if type == "array" then . else .data end)
+        | [.[] | select(.readAt == null) | select(.tags == null or ([.tags[] | IN($exclude[])] | any | not))]')
+
+    ids=$(printf '%s' "$filtered" | jq -r '.[].id')
+    window_date=$(printf '%s' "$filtered" | jq -r 'if length == 0 then empty else max_by(.addedAt).addedAt | split("T")[0] end')
+
+    if [ -z "$ids" ]; then
+        die "No articles in input."
+    fi
+
+    total=$(printf '%s\n' "$ids" | wc -l | tr -d ' ')
+    msg "Found %s articles. Fetching content..." "$total"
+
+    if [ -n "$title_fragment" ]; then
+        epub_title="$title_fragment"
+    else
+        epub_title="GoodLinks"
+    fi
+    if [ "$append_date" = "1" ]; then
+        epub_title="$epub_title $window_date"
+    fi
+    if [ -z "$output" ]; then
+        output="${epub_title}.epub"
+    fi
+
+    tmpdir=$(mktemp -d -p "${TMPDIR:-/tmp}")
+    trap 'rm -rf "$tmpdir"' EXIT
+
+    combined_md="$tmpdir/combined.md"
+    printf -- '---\ntitle: "%s"\ndate: "%s"\n---\n\n' "$epub_title" "$(date +%Y-%m-%d)" >"$combined_md"
+
+    fetched_ids=()
+    count=0
+    index=0
+    while IFS= read -r id; do
+        [ -z "$id" ] && continue
+        index=$((index + 1))
+        title=$(printf '%s' "$filtered" | jq -r --arg id "$id" '.[] | select(.id == $id) | .title // .url')
+        url=$(printf '%s' "$filtered" | jq -r --arg id "$id" '.[] | select(.id == $id) | .url')
+        msg_verbose "  [%d/%d] %s" "$index" "$total" "$title"
+
+        ret=0
+        content=$(goodlinksctl links content "$id" --format markdown 2>/dev/null) || ret=$?
+        if [ "$ret" -ne 0 ] || [ -z "$content" ]; then
+            msg "Skipping (content unavailable): %s" "$title"
+            continue
+        fi
+
+        body=$(printf '%s' "$content" | strip_frontmatter)
+        printf '# %s\n\n*<%s>*\n\n%s\n\n' "$title" "$url" "$body" >>"$combined_md"
+        fetched_ids+=("$id")
+        count=$((count + 1))
+    done <<< "$ids"
+
+    if [ "$count" -eq 0 ]; then
+        die "No article content could be fetched."
+    fi
+
+    msg "Generating epub from %d articles..." "$count"
+
+    run nix run nixpkgs#pandoc -- \
+        --from markdown \
+        --to epub3 \
+        --split-level=1 \
+        --toc \
+        --metadata "title=$epub_title" \
+        --metadata "date=$(date +%Y-%m-%d)" \
+        -o "$output" \
+        "$combined_md"
+
+    if [ "${dry_run:-0}" != "1" ]; then
+        msg "Written: %s" "$output"
+    fi
+
+    if [ "$mark_read" = "1" ] && [ "${dry_run:-0}" != "1" ]; then
+        msg "Validating epub with calibre..."
+        ret=0
+        if [ "${verbosity:-0}" -gt 0 ]; then
+            ebook-convert "$output" "$tmpdir/validated.epub" || ret=$?
+        else
+            ebook-convert "$output" "$tmpdir/validated.epub" >/dev/null 2>&1 || ret=$?
+        fi
+        if [ "$ret" -ne 0 ]; then
+            msg "warning: calibre validation failed — not marking articles as read"
+        else
+            msg "Marking %d articles as read..." "$count"
+            ret=0
+            printf '%s\n' "${fetched_ids[@]}" | goodlinksctl --json links update --stdin --read >/dev/null || ret=$?
+            if [ "$ret" -eq 0 ]; then
+                msg "Marked %d articles as read." "$count"
+            elif [ "$ret" -eq 7 ]; then
+                msg "warning: some articles could not be marked as read (partial failure)"
+            else
+                msg "warning: failed to mark articles as read (exit %d)" "$ret"
+            fi
+        fi
+    fi
+
+    if [ $add_to_calibre -eq 1 ]; then
+        if [ "${dry_run:-0}" = "1" ]; then
+            msg "would add %s to calibre" "$output"
+        else
+            msg "Adding %s to calibre..." "$output"
+            add_epub_to_calibre "$epub_title" "$output"
+            msg "Added to calibre: %s" "$epub_title"
+        fi
+    fi
+}
+
+main "$@"

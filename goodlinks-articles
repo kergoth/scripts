@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Usage: goodlinks-articles [options]
+#
+# Filter goodlinksctl JSON to unread saves that are plain articles. Reads
+# JSON from stdin (either the goodlinksctl {data: [...]} envelope or a bare
+# array) and writes a filtered JSON array to stdout.
+#
+# Excludes already-read saves and, if ~/.config/goodlinks/schema.toml is
+# present, saves tagged with any exclusive_tags bucket tag. Without the
+# config, bucket tag filtering is skipped with a warning.
+#
+# Options:
+#     -n          Dry run, pass input through unmodified
+#     -v          Increase verbosity, can be specified multiple times
+#     -q          Decrease verbosity, can be specified multiple times
+#     -h          Show this help message
+set -euo pipefail
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    dry_run=0
+    verbosity=0
+
+    while getopts 'nvqh' opt; do
+        case "$opt" in
+            n) dry_run=1 ;;
+            v) verbosity=$((verbosity + 1)) ;;
+            q) verbosity=$((verbosity - 1)) ;;
+            h) show_help; exit 0 ;;
+            \?)
+                echo "Unknown option: -$OPTARG" >&2
+                show_help >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+}
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg "error: %s" "$*"
+    exit 1
+}
+
+main() {
+    process_arguments "$@"
+
+    command -v jq >/dev/null 2>&1 || die "jq not found in PATH"
+
+    if [ -t 0 ]; then
+        die "no input: pipe goodlinksctl JSON to stdin"
+    fi
+
+    input_json=$(cat)
+
+    if [ "${dry_run:-0}" = "1" ]; then
+        printf '%s\n' "$input_json"
+        return
+    fi
+
+    schema_toml="$HOME/.config/goodlinks/schema.toml"
+    ret=0
+    non_article_tags=$(python3 -c "
+import sys, json, tomllib
+cfg = tomllib.load(sys.stdin.buffer)
+if 'exclusive_tags' not in cfg:
+    sys.exit(1)
+print(json.dumps(cfg['exclusive_tags']))
+" <"$schema_toml" 2>/dev/null) || ret=$?
+    if [ "$ret" -ne 0 ] || [ -z "$non_article_tags" ]; then
+        msg "warning: %s missing or has no exclusive_tags — bucket tag filtering disabled" "$schema_toml"
+        non_article_tags='[]'
+    fi
+
+    msg_verbose "Filtering to unread articles..."
+    printf '%s' "$input_json" | jq \
+        --argjson exclude "$non_article_tags" \
+        '(if type == "array" then . else .data end)
+        | [.[] | select(.readAt == null) | select(.tags == null or ([.tags[] | IN($exclude[])] | any | not))]'
+}
+
+main "$@"

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT INT TERM
+
+id="$1"
+if goodlinksctl links get --json "$id" >"$tmpfile"; then
+    url=$(jq -r .url "$tmpfile")
+    if [ -z "$url" ]; then
+        echo >&2 "Error retrieving url from id $id"
+        exit 1
+    fi
+else
+    url="$id"
+
+    if [ -z "$url" ]; then
+        echo >&2 "id/url must be non-empty"
+        exit 1
+    fi
+fi
+
+open "goodlinks://x-callback-url/open?url=$(urlencode "$url")"

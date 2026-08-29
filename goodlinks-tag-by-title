@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+dry_run=
+case "${1:-}" in
+    -n|--dry-run)
+        dry_run=1
+        ;;
+    -h|--help)
+        echo >&2 "${0##*/} [-n] [--dry-run] [-h] [--help] TITLE_REGEX TAG"
+        exit 2
+        ;;
+esac
+
+title_pattern="$1"
+tag="$2"
+
+goodlinksctl links list --json --all-pages \
+  | jq -r --arg pattern "$title_pattern" --arg tag "$tag" '
+      .data[]
+      | select((.title // "") | test($pattern; "i"))
+      | select(((.tags // []) | index($tag)) == null)
+      | .id
+    ' \
+  | xargs -n 10 -t ${dry_run:+echo }goodlinksctl links update --add-tag "$tag"
