@@ -18,6 +18,11 @@ canonical tag or an unparseable one -- canonical tags are opt-in and
 sometimes wrong, so treat this as a third, noisier tier on top of
 --follow-redirects rather than a replacement for it.
 
+Pass --trailing-slash to group non-root saved URLs that differ only by their
+terminal slash. The command resolves only those candidate records and reports
+whether an origin redirected one saved URL to another record's exact saved
+URL. This is evidence for manual review, not a duplicate decision.
+
 Read-only: reports groups only, does not delete or tag anything. Review each
 group and remove the ones you don't want to keep, e.g.:
 
@@ -38,7 +43,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 DEFAULT_WORKERS = 8
 DEFAULT_TIMEOUT = 15.0
@@ -169,6 +174,108 @@ def resolve_entries(
     return resolved
 
 
+def resolve_trailing_slash_entry(entry: dict[str, Any], timeout: float) -> dict[str, Any]:
+    url = entry["url"]
+    result: dict[str, Any] = {
+        "ok": None,
+        "status": None,
+        "final_url": url,
+        "error": None,
+    }
+    entry["redirect"] = result
+
+    if not url or url.lower().startswith("mailto:"):
+        result["error"] = "skipped: not http(s)"
+        return entry
+
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            result.update(
+                ok=resp.status is not None and 200 <= resp.status < 400,
+                status=resp.status,
+                final_url=resp.geturl(),
+            )
+    except urllib.error.HTTPError as exc:
+        result.update(
+            ok=False,
+            status=exc.code,
+            final_url=exc.geturl(),
+            error=f"http {exc.code}",
+        )
+    except urllib.error.URLError as exc:
+        result.update(ok=False, error=str(exc.reason))
+    except TimeoutError:
+        result.update(ok=False, error="timeout")
+    except OSError as exc:
+        result.update(ok=False, error=str(exc))
+    except Exception as exc:  # noqa: BLE001 - one bad link must not abort the run
+        result.update(ok=False, error=f"unexpected: {exc}")
+
+    return entry
+
+
+def resolve_trailing_slash_groups(
+    groups: list[list[dict[str, Any]]],
+    workers: int,
+    timeout: float,
+    verbosity: int,
+) -> None:
+    entries = [entry for group in groups for entry in group]
+    if verbosity >= 0:
+        print(f"resolving redirects for {len(entries)} trailing-slash candidates...", file=sys.stderr, flush=True)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(resolve_trailing_slash_entry, entry, timeout) for entry in entries
+        ]
+        for future in as_completed(futures):
+            entry = future.result()
+            redirect = entry["redirect"]
+            if verbosity > 0:
+                suffix = ""
+                if redirect["final_url"] != entry["url"]:
+                    suffix = f" -> {redirect['final_url']}"
+                print(f"{entry['url']}{suffix}", file=sys.stderr, flush=True)
+            elif verbosity == 0:
+                print(".", end="", file=sys.stderr, flush=True)
+    if verbosity == 0:
+        print(file=sys.stderr)
+
+
+def fetch_trailing_slash_highlight_info(link_id: str) -> dict[str, Any]:
+    cmd = [
+        "goodlinksctl",
+        "--json",
+        "highlights",
+        "list",
+        "--link-id",
+        link_id,
+        "--all-pages",
+    ]
+    proc = run(cmd)
+    if proc.returncode != 0:
+        return {"count": None, "error": f"goodlinksctl exited {proc.returncode}"}
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {"count": None, "error": "invalid GoodLinksCTL JSON"}
+    return {"count": len(payload.get("data", [])), "error": None}
+
+
+def annotate_trailing_slash_highlights(
+    groups: list[list[dict[str, Any]]], workers: int, verbosity: int
+) -> None:
+    entries = [entry for group in groups for entry in group if entry["id"]]
+    if not entries:
+        return
+    if verbosity >= 0:
+        print(f"checking highlights for {len(entries)} trailing-slash candidates...", file=sys.stderr, flush=True)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        infos = list(pool.map(fetch_trailing_slash_highlight_info, [entry["id"] for entry in entries]))
+    for entry, info in zip(entries, infos, strict=True):
+        entry["highlights"] = info
+
+
 def fetch_highlight_count(link_id: str) -> int:
     cmd = [
         "goodlinksctl",
@@ -213,6 +320,63 @@ def group_by_key(
     return [grp for grp in groups.values() if len(grp) > 1]
 
 
+def normalize_trailing_slash_url(url: str) -> str:
+    path = urlsplit(url).path
+    if path in ("", "/") or not path.endswith("/"):
+        return url
+
+    suffix_start = len(url)
+    for delimiter in ("?", "#"):
+        index = url.find(delimiter)
+        if index >= 0:
+            suffix_start = min(suffix_start, index)
+    return url[: suffix_start - 1] + url[suffix_start:]
+
+
+def build_trailing_slash_groups(
+    entries: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for entry in entries:
+        entry["normalized_url"] = normalize_trailing_slash_url(entry["url"])
+        groups[entry["normalized_url"]].append(entry)
+
+    result = [
+        group
+        for group in groups.values()
+        if len({entry["url"] for entry in group}) > 1
+    ]
+    return sorted(result, key=lambda group: group[0]["normalized_url"])
+
+
+def find_redirect_relations(entries: list[dict[str, Any]]) -> list[dict[str, str]]:
+    entries_by_url: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for entry in entries:
+        entries_by_url[entry["url"]].append(entry)
+
+    relations: list[dict[str, str]] = []
+    for entry in entries:
+        redirect = entry.get("redirect", {})
+        final_url = redirect.get("final_url")
+        if (
+            redirect.get("ok") is not True
+            or final_url == entry["url"]
+            or final_url not in entries_by_url
+        ):
+            continue
+        for destination in entries_by_url[final_url]:
+            relations.append(
+                {
+                    "from_id": entry["id"],
+                    "from_url": entry["url"],
+                    "to_id": destination["id"],
+                    "to_url": destination["url"],
+                    "final_url": final_url,
+                }
+            )
+    return sorted(relations, key=lambda relation: (relation["from_id"], relation["to_id"]))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -232,18 +396,23 @@ def main() -> int:
         "canonical tag is found)",
     )
     parser.add_argument(
+        "--trailing-slash",
+        action="store_true",
+        help="group terminal-slash variants and report redirect evidence; incompatible with --follow-redirects and --canonical",
+    )
+    parser.add_argument(
         "-j",
         "--workers",
         type=int,
         default=DEFAULT_WORKERS,
-        help=f"parallel checks with --follow-redirects (default: {DEFAULT_WORKERS})",
+        help=f"parallel checks with --follow-redirects or --trailing-slash (default: {DEFAULT_WORKERS})",
     )
     parser.add_argument(
         "-t",
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
-        help=f"per-request timeout in seconds with --follow-redirects (default: {DEFAULT_TIMEOUT})",
+        help=f"per-request timeout with --follow-redirects or --trailing-slash (default: {DEFAULT_TIMEOUT})",
     )
     parser.add_argument(
         "--json", action="store_true", help="emit one JSON object per group"
@@ -263,51 +432,101 @@ def main() -> int:
         help="suppress progress output (summary still printed)",
     )
     args = parser.parse_args()
+    if args.trailing_slash and (args.follow_redirects or args.canonical):
+        parser.error("--trailing-slash cannot be combined with --follow-redirects or --canonical")
     verbosity = args.verbosity - args.quiet
 
     links = fetch_links(verbosity)
     entries = [build_entry(link) for link in links]
 
     follow_redirects = args.follow_redirects or args.canonical
-    if follow_redirects:
+    if args.trailing_slash:
+        groups = build_trailing_slash_groups(entries)
+        resolve_trailing_slash_groups(groups, args.workers, args.timeout, verbosity)
+        annotate_trailing_slash_highlights(groups, args.workers, verbosity)
+        group_key = "normalized_url"
+    elif follow_redirects:
         entries = resolve_entries(
             entries, args.workers, args.timeout, verbosity, args.canonical
         )
         group_key = "canonical_url" if args.canonical else "resolved_url"
+        groups = group_by_key(entries, group_key)
+        groups.sort(key=lambda grp: grp[0][group_key])
+        annotate_highlight_counts(groups, args.workers, verbosity)
     else:
         group_key = "url"
-
-    groups = group_by_key(entries, group_key)
-    groups.sort(key=lambda grp: grp[0][group_key])
-    annotate_highlight_counts(groups, args.workers, verbosity)
+        groups = group_by_key(entries, group_key)
+        groups.sort(key=lambda grp: grp[0][group_key])
+        annotate_highlight_counts(groups, args.workers, verbosity)
 
     for group in groups:
         if args.json:
-            print(json.dumps({"url": group[0][group_key], "entries": group}))
+            payload: dict[str, Any] = {"url": group[0][group_key], "entries": group}
+            if args.trailing_slash:
+                payload["redirects"] = find_redirect_relations(group)
+            print(json.dumps(payload))
         else:
             for entry in group:
-                meta = (
-                    f"tags={','.join(entry['tags']) or '-'}"
-                    f" starred={entry['starred']}"
-                    f" highlights={entry.get('highlight_count', 0)}"
-                    f" read={'yes' if entry['read_at'] else 'no'}"
-                    f" words={entry['word_count'] if entry['word_count'] is not None else '-'}"
-                    f" added={entry['added_at'] or '-'}"
-                )
-                columns = [entry["id"], entry["url"]]
-                if follow_redirects and entry["resolved_url"] != entry["url"]:
-                    columns.append(entry["resolved_url"])
-                if (
-                    args.canonical
-                    and entry["canonical_url"] not in (entry["url"], entry["resolved_url"])
-                ):
-                    columns.append(entry["canonical_url"])
-                columns += [entry["title"], meta]
+                if args.trailing_slash:
+                    redirect = entry["redirect"]
+                    highlights = entry.get("highlights", {"count": None, "error": "not checked"})
+                    meta = (
+                        f"tags={','.join(entry['tags']) or '-'}"
+                        f" starred={entry['starred']}"
+                        f" highlighted={entry['highlighted']}"
+                        f" highlights={highlights['count'] if highlights['count'] is not None else '?'}"
+                        f" highlight_error={highlights['error'] or '-'}"
+                        f" read={'yes' if entry['read_at'] else 'no'}"
+                        f" words={entry['word_count'] if entry['word_count'] is not None else '-'}"
+                        f" added={entry['added_at'] or '-'}"
+                    )
+                    columns = [
+                        entry["id"],
+                        entry["url"],
+                        entry["normalized_url"],
+                        redirect["final_url"],
+                        redirect["error"] or "-",
+                        entry["title"],
+                        meta,
+                    ]
+                else:
+                    meta = (
+                        f"tags={','.join(entry['tags']) or '-'}"
+                        f" starred={entry['starred']}"
+                        f" highlights={entry.get('highlight_count', 0)}"
+                        f" read={'yes' if entry['read_at'] else 'no'}"
+                        f" words={entry['word_count'] if entry['word_count'] is not None else '-'}"
+                        f" added={entry['added_at'] or '-'}"
+                    )
+                    columns = [entry["id"], entry["url"]]
+                    if follow_redirects and entry["resolved_url"] != entry["url"]:
+                        columns.append(entry["resolved_url"])
+                    if (
+                        args.canonical
+                        and entry["canonical_url"] not in (entry["url"], entry["resolved_url"])
+                    ):
+                        columns.append(entry["canonical_url"])
+                    columns += [entry["title"], meta]
                 print("\t".join(columns))
+            if args.trailing_slash:
+                for relation in find_redirect_relations(group):
+                    print(
+                        "\t".join(
+                            [
+                                "redirect",
+                                relation["from_id"],
+                                relation["from_url"],
+                                relation["to_id"],
+                                relation["to_url"],
+                                relation["final_url"],
+                            ]
+                        )
+                    )
             print()
 
+    checked = sum(len(group) for group in groups) if args.trailing_slash else len(entries)
     print(
-        f"summary\tchecked={len(entries)}\tgroups={len(groups)}",
+        f"summary\tchecked={checked}\tgroups={len(groups)}",
         file=sys.stderr,
     )
 

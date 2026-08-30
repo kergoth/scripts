@@ -348,7 +348,7 @@
 - **goodlinks-autotag** [python, argparse]: Auto-tag GoodLinks links by URL host, driven by a rule table. Dry-run by default; `--apply` writes tags via `goodlinksctl`.
 - **goodlinks-by-date** [bash, -h]: Filter goodlinksctl JSON by date window.
 - **goodlinks-check-links** [python, argparse]: Check GoodLinks source URLs for dead or error responses. Read-only; pipe `--json` failures into `goodlinksctl` to tag them.
-- **goodlinks-find-dupes** [python, argparse]: Find GoodLinks links saved more than once, grouped by raw URL, `-r` redirect-resolved URL, or `-c` canonical URL. Read-only; reports groups for manual review.
+- **goodlinks-find-dupes** [python, argparse]: Find GoodLinks duplicate candidates by raw URL, `-r` redirect-resolved URL, `-c` canonical URL, or `--trailing-slash` normalization. The terminal-slash mode reports directed redirect evidence for manual review. Read-only.
 - **goodlinks-maintain** [sh, -h]: Run all GoodLinks maintenance passes: autotag, mark read-invariant tags read, remove links with unreadable URL schemes.
 - **goodlinks-mark-invariant-read** [python, argparse]: Mark GoodLinks links read when tagged with a read-invariant tag (e.g. reference). Dry-run by default; `--apply` writes.
 - **goodlinks-migrate-link** [python, argparse]: Recreate a dead GoodLinks link at a new URL, carrying metadata over and cross-linking old/new entries. Dry-run by default; `--apply` writes. Never deletes the old entry.
