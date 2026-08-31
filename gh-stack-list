@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage: gh-stack-list [-R owner/repo] [-s state] [-L limit] [-j] [-v] [-q] [-h]
+#
+# List every gh-stack stack in a repository along with the pull requests
+# each one contains. Queries the GitHub REST "pull request stacks" API
+# directly (repos/{owner}/{repo}/stacks), so unlike `gh stack view` it is
+# not limited to the stack of the currently checked out branch and does
+# not require a local clone.
+#
+# -s only affects which PRs are consulted for title/branch/url details; a
+# stack member outside that state (e.g. a merged PR when -s open, the
+# default) still appears, just with placeholder details. Pass -s all to
+# always resolve full details for every member.
+#
+# Options:
+#     -R REPO     Target repository as owner/repo (default: current repo)
+#     -s STATE    PR state to resolve details for: open|closed|merged|all (default: open, same as `gh pr list`)
+#     -L LIMIT    Maximum number of pull requests to resolve details for (default: unlimited)
+#     -j          Output raw JSON instead of a tree view
+#     -v          Increase verbosity, can be specified multiple times
+#     -q          Decrease verbosity, can be specified multiple times
+#     -h          Show this help message
+
+usage() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg "$@"
+    exit 1
+}
+
+process_arguments() {
+    repo=
+    state=open
+    limit=0
+    json_output=0
+    verbosity=0
+
+    while getopts "R:s:L:jvqh" opt; do
+        case $opt in
+        R)
+            repo=$OPTARG
+            ;;
+        s)
+            state=$OPTARG
+            ;;
+        L)
+            limit=$OPTARG
+            ;;
+        j)
+            json_output=1
+            ;;
+        v)
+            verbosity=$((verbosity + 1))
+            ;;
+        q)
+            verbosity=$((verbosity - 1))
+            ;;
+        h)
+            usage
+            exit 0
+            ;;
+        \?)
+            usage >&2
+            exit 1
+            ;;
+        esac
+    done
+}
+
+# Add `.title`, `.headRefName`, `.baseRefName`, and `.url` to each pull
+# request entry inside each stack's `pull_requests` array, looked up from a
+# `gh pr list --json` array (the stacks endpoint itself only returns PR
+# number/state/draft/head sha, not these fields).
+merge_pr_details() {
+    jq -s '
+        (
+            (.[1] // [])
+            | map({(.number | tostring): {title, headRefName, baseRefName, url}})
+            | add // {}
+        ) as $details
+        | (.[0] // [])
+        | map(.pull_requests |= map(. + ($details[(.number | tostring)] // {
+            title: "(unknown)", headRefName: "?", baseRefName: "?", url: ""
+        })))
+    ' "$1" "$2"
+}
+
+tree_format() {
+    jq -r '
+        .[] | "Stack #\(.number)  (base: \(.base.ref), \(if .open then "open" else "closed" end))",
+        (.pull_requests[] | "  #\(.number)  \(.state)\(if .draft then " draft" else "" end)  \(.title)  (\(.headRefName) -> \(.baseRefName))  \(.url)"),
+        ""
+    '
+}
+
+main() {
+    process_arguments "$@"
+
+    if [ -z "$repo" ]; then
+        repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+    fi
+    msg_verbose "Repository: %s" "$repo"
+
+    tmpdir=$(mktemp -d -p "${TMPDIR:-/tmp}")
+    trap 'rm -rf "$tmpdir"' EXIT
+
+    msg_verbose "Fetching stacks..."
+    if ! gh api --paginate "repos/$repo/stacks" >"$tmpdir/stacks.json" 2>"$tmpdir/stacks.err"; then
+        if grep -q "404" "$tmpdir/stacks.err"; then
+            die "Stacked pull requests are not enabled for %s" "$repo"
+        fi
+        cat "$tmpdir/stacks.err" >&2
+        exit 1
+    fi
+
+    # gh pr list has no --paginate flag; it caps output at --limit rather
+    # than fetching everything. Pass a very high limit by default so it
+    # effectively fetches all matching PRs.
+    fetch_limit=$limit
+    if [ "$fetch_limit" -eq 0 ]; then
+        fetch_limit=1000000
+    fi
+
+    msg_verbose "Fetching pull request details (state=%s, limit=%s)..." "$state" "$fetch_limit"
+    gh pr list -R "$repo" --state "$state" --limit "$fetch_limit" \
+        --json number,title,headRefName,baseRefName,url \
+        >"$tmpdir/prs.json"
+
+    if [ "$json_output" -eq 1 ]; then
+        merge_pr_details "$tmpdir/stacks.json" "$tmpdir/prs.json"
+    else
+        merge_pr_details "$tmpdir/stacks.json" "$tmpdir/prs.json" | tree_format
+    fi
+}
+
+main "$@"

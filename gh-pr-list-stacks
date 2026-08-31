@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage: gh-pr-list-stacks [-R owner/repo] [-s state] [-L limit] [-j] [-v] [-q] [-h]
+#
+# List pull requests annotated with gh-stack stack membership (stack number
+# and position within the stack), without checking out any branch. Queries
+# the GitHub REST "pull request stacks" API directly, so it works for any
+# stack in the repository, not just the one for the currently checked out
+# branch (which is all `gh stack view` can show).
+#
+# Options:
+#     -R REPO     Target repository as owner/repo (default: current repo)
+#     -s STATE    PR state: open|closed|merged|all (default: open, same as `gh pr list`)
+#     -L LIMIT    Maximum number of pull requests to fetch (default: unlimited)
+#     -j          Output raw JSON instead of a table
+#     -v          Increase verbosity, can be specified multiple times
+#     -q          Decrease verbosity, can be specified multiple times
+#     -h          Show this help message
+
+usage() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg "$@"
+    exit 1
+}
+
+process_arguments() {
+    repo=
+    state=open
+    limit=0
+    json_output=0
+    verbosity=0
+
+    while getopts "R:s:L:jvqh" opt; do
+        case $opt in
+        R)
+            repo=$OPTARG
+            ;;
+        s)
+            state=$OPTARG
+            ;;
+        L)
+            limit=$OPTARG
+            ;;
+        j)
+            json_output=1
+            ;;
+        v)
+            verbosity=$((verbosity + 1))
+            ;;
+        q)
+            verbosity=$((verbosity - 1))
+            ;;
+        h)
+            usage
+            exit 0
+            ;;
+        \?)
+            usage >&2
+            exit 1
+            ;;
+        esac
+    done
+}
+
+# Join stacks (repos/{owner}/{repo}/stacks) against a PR list, adding a
+# `.stack` field ({stack, position, total} or null) to each PR.
+merge_stacks() {
+    jq -s '
+        (.[0] // []) as $stacks
+        | (.[1] // []) as $prs
+        | (
+            $stacks
+            | map(
+                . as $s
+                | ($s.pull_requests | length) as $total
+                | ($s.pull_requests | to_entries | map({
+                    key: (.value.number | tostring),
+                    value: {stack: $s.number, position: (.key + 1), total: $total}
+                }))
+            )
+            | add // []
+            | from_entries
+        ) as $index
+        | $prs | map(. + {stack: ($index[(.number | tostring)] // null)})
+    ' "$1" "$2"
+}
+
+table_format() {
+    jq -r '
+        .[] | [
+            "#\(.number)",
+            (if .stack then "#\(.stack.stack) (\(.stack.position)/\(.stack.total))" else "-" end),
+            ((if .isDraft then "[draft] " else "" end) + .title),
+            "\(.headRefName) -> \(.baseRefName)",
+            .url
+        ] | @tsv
+    ' | column -t -s "$(printf '\t')"
+}
+
+main() {
+    process_arguments "$@"
+
+    if [ -z "$repo" ]; then
+        repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+    fi
+    msg_verbose "Repository: %s" "$repo"
+
+    tmpdir=$(mktemp -d -p "${TMPDIR:-/tmp}")
+    trap 'rm -rf "$tmpdir"' EXIT
+
+    # gh pr list has no --paginate flag; it caps output at --limit rather
+    # than fetching everything. Pass a very high limit by default so it
+    # effectively fetches all matching PRs.
+    fetch_limit=$limit
+    if [ "$fetch_limit" -eq 0 ]; then
+        fetch_limit=1000000
+    fi
+
+    msg_verbose "Fetching pull requests (state=%s, limit=%s)..." "$state" "$fetch_limit"
+    gh pr list -R "$repo" --state "$state" --limit "$fetch_limit" \
+        --json number,title,headRefName,baseRefName,url,isDraft \
+        >"$tmpdir/prs.json"
+
+    msg_verbose "Fetching stacks..."
+    if ! gh api --paginate "repos/$repo/stacks" >"$tmpdir/stacks.json" 2>"$tmpdir/stacks.err"; then
+        if grep -q "404" "$tmpdir/stacks.err"; then
+            die "Stacked pull requests are not enabled for %s" "$repo"
+        fi
+        cat "$tmpdir/stacks.err" >&2
+        exit 1
+    fi
+
+    if [ "$json_output" -eq 1 ]; then
+        merge_stacks "$tmpdir/stacks.json" "$tmpdir/prs.json"
+    else
+        merge_stacks "$tmpdir/stacks.json" "$tmpdir/prs.json" | table_format
+    fi
+}
+
+main "$@"
