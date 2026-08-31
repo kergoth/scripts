@@ -10,7 +10,7 @@ case "$VISUAL" in
         ;;
 esac
 
-files="$(mktemp -t "${0##*/}.XXXXXX")" || exit $?
+files="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")" || exit $?
 trap 'rm -f "$files"' EXIT INT TERM
 cat >"$files"
 if [ -s "$files" ]; then

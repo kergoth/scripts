@@ -13,7 +13,7 @@ get_cd_device() {
     return 1
 }
 
-tocfile="$(mktemp -t "$(basename "$0").XXXXXX")"
+tocfile="$(mktemp "${TMPDIR:-/tmp}/$(basename "$0").XXXXXX")"
 trap 'rm -f "$tocfile"' EXIT
 
 rm -f "$tocfile"

@@ -16,9 +16,9 @@
 
 set -eu
 
-tmpfile="$(mktemp -t "${0##*/}.XXXXXX")"
+tmpfile="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")"
 trap 'rm "$tmpfile"' EXIT INT TERM
-tmpfile2="$(mktemp -t "${0##*/}.XXXXXX")"
+tmpfile2="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")"
 trap 'rm "$tmpfile" "$tmpfile2"' EXIT INT TERM
 
 tee "$tmpfile" | tr '\n' '\0' | xargs -0 "$@" >"$tmpfile2"

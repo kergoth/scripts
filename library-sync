@@ -33,7 +33,7 @@ fi
 scriptdir=$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)
 PATH="$scriptdir:$PATH"
 
-tmpdir=$(mktemp -d)
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 # Clean up after ourselves
 trap 'rm -rf "$tmpdir"' EXIT
 # Allow clean handling of libsync's interruption, and ensure we leave no child processes behind

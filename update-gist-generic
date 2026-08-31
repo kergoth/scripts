@@ -32,8 +32,8 @@ gist_url="$1"
 filename="${2:--}"
 raw_url="$(echo "$gist_url" | sed "s,github\.com,githubusercontent.com,")/raw/$filename"
 
-tmpfile="$(mktemp -t "$filename.XXXXXX")"
-tmpfile2="$(mktemp -t "$filename.XXXXXX")"
+tmpfile="$(mktemp "${TMPDIR:-/tmp}/$filename.XXXXXX")"
+tmpfile2="$(mktemp "${TMPDIR:-/tmp}/$filename.XXXXXX")"
 trap 'rm -f "$tmpfile" "$tmpfile2"' EXIT INT TERM
 
 if [ -e "$filename" ]; then

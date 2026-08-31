@@ -34,7 +34,7 @@ excluded_pattern="^(dyn.*|$(echo "${excluded_utis[*]}" | tr ' ' '|' | sed -e 's/
 app_dir="$1"
 new_app_id="$2"
 
-tmpdir=$(mktemp -d -t "${0##*/}.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT
 
 if [ -d "$new_app_id" ]; then

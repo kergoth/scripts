@@ -34,7 +34,7 @@ fi
 
 printf >&2 'Searching for dead symbolic links in: %s\n' "$*"
 
-tmpfile="$(mktemp -t "${0##*/}.XXXXXX")" || exit 1
+tmpfile="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")" || exit 1
 trap 'rm -f "$tmpfile"' EXIT INT TERM
 
 TAB="$(printf '\t')"

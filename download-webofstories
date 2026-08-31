@@ -18,7 +18,7 @@ get_speaker() {
         | head -n 1
 }
 
-linksfile="$(mktemp -t "${0##*/}.XXXXXX")" || exit 1
+linksfile="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")" || exit 1
 trap 'rm -f "$linksfile"' EXIT INT TERM
 
 case "$url" in

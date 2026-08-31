@@ -19,7 +19,7 @@ readlinks () {
     done
 }
 
-caches=`mktemp -t clean-sstate.XXXXXX`
+caches=`mktemp "${TMPDIR:-/tmp}/clean-sstate.XXXXXX"`
 if [ $# -eq 0 ]; then
     set -- $(cache_paths | grep -E '/clarson|kergoth/')
 fi

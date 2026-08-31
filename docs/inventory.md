@@ -253,8 +253,9 @@
 - **devpod-stop** [bash, -h]: Parallel-stop DevPod workspaces with escalating fallback.
 - **distrobox-create-chimera** [bash, none]: Create a chimera distrobox with mount/doas pre-init.
 
-## Path / filesystem helpers (`abs_readlink`, `abspath`, `normpath`, `relpath`, `path_join`, `dead-symlinks`, `dirinfo`, `find-newest`, `find-oldest`, `iln`, `lstree`, `mvd`, `newest`, `oldest`, `remove-empty-dirs`, `resolve-alias`, `resolvelink`, `resolvelinks`, `datefind`)
+## Path / filesystem helpers (`abs_readlink`, `abspath`, `normpath`, `relpath`, `path_join`, `add-unlisted-summaries`, `dead-symlinks`, `dirinfo`, `find-newest`, `find-oldest`, `iln`, `lstree`, `mvd`, `newest`, `oldest`, `prune-under-markers`, `remove-empty-dirs`, `resolve-alias`, `resolvelink`, `resolvelinks`, `datefind`)
 - **abs_readlink** [sh, none]: Print absolute path of symlink target(s).
+- **add-unlisted-summaries** [sh, none]: Add synthetic summaries for unlisted directory children in a path stream.
 - **abspath** [sh, -h]: Print absolute version of each PATH (relative-to override).
 - **datefind** [bash, -h]: List files (find arguments) annotated with dates.
 - **dead-symlinks** [sh, -h]: Recursively find broken symlinks.
@@ -268,6 +269,7 @@
 - **normpath** [sh, none]: Print canonical form of a path (no symlinks resolved).
 - **oldest** [bash, none]: Oldest file via `datefind | head -n1`.
 - **path_join** [python, none]: `os.path.join(*sys.argv[1:])`.
+- **prune-under-markers** [sh, none]: Collapse paths below marker-root directories in a path stream.
 - **relpath** [python, none]: `os.path.relpath(path, start)`.
 - **remove-empty-dirs** [bash, none]: Remove empty dirs and stray .DS_Store files. **DESTRUCTIVE**.
 - **resolve-alias** [sh, -h]: Resolve macOS Finder aliases to their target.

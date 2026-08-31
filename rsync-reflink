@@ -254,7 +254,7 @@ main() {
     sync_with_reflink
 }
 
-tmpdir=$(mktemp -d)
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT
 
 main "$@"

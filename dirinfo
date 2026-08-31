@@ -85,7 +85,7 @@ case "${OSTYPE:-}" in
         ;;
 esac
 
-tmpfile=$(mktemp -t dirinfo.XXXXXXXXXX)
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/dirinfo.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
 
 datefind=datefind

@@ -108,7 +108,7 @@ if [ ! -e "$brewenv_dir/bin/brew" ]; then
 fi
 "$brewenv_dir/bin/brew" update
 
-tmpdir=$(mktemp -d -t "${0##*/}.XXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 # Link any existing deps from master homebrew install
 if [ $use_from_master -eq 1 ]; then

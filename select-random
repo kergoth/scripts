@@ -2,7 +2,7 @@
 
 set -eo pipefail
 
-content="$(mktemp -t "${0##*/}.XXXX")"
+content="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")"
 cat "$@" >"$content"
 count="$(wc -l <"$content")"
 

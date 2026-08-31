@@ -1,6 +1,6 @@
 #!/bin/sh
 
-disabled="$(mktemp -t "${0##*/}.XXXXXX")" || exit 1
+disabled="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")" || exit 1
 trap 'rm -f "$disabled"' EXIT INT TERM
 
 aprintf () {

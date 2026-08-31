@@ -43,7 +43,7 @@ for arg; do
 done
 eval set -- "$saved"
 
-tmpdir=$(mktemp -d -t "${0##*/}.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 sort "$first" >"$tmpdir/first"
 sort "$second" >"$tmpdir/second"

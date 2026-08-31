@@ -2,7 +2,7 @@
 
 set -e
 
-tmpfile=$(mktemp -t "${0##*/}.XXXXXX")
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -rf "$tmpfile"' EXIT INT TERM
 
 if [ $# -ne 1 ]; then

@@ -3,7 +3,7 @@
 if [ $# -eq 0 ]; then
     cat
 else
-    tmp="$(mktemp -t "${0##*/}.XXXXXX")" || exit 1
+    tmp="$(mktemp "$(dirname "$1")/${0##*/}.XXXXXX")" || exit 1
     trap 'rm -f "$tmp"' EXIT INT TERM
     cat >"$tmp"
     mv "$tmp" "$1"

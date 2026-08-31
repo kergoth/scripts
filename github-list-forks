@@ -47,7 +47,7 @@ _repo_forks() {
         done
 }
 
-cache_dir="$(mktemp -d -t "${0##*/}.XXXXXX")" || exit 1
+cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")" || exit 1
 trap 'rm -rf "$cache_dir"' EXIT INT TERM
 
 all_forks=0

@@ -471,7 +471,7 @@ if [ $set_modify -eq 0 ] && [ $set_create -eq 0 ]; then
     exit 0
 fi
 
-tmpfile=$(mktemp -t metadate.XXXXXX)
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/metadate.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT INT TERM
 
 ret=0

@@ -2,7 +2,7 @@
 # Run the specified command, sending the command being run and its output to
 # a new private gist at https://gist.github.com/
 
-tempfile="$(mktemp -t "${0##*/}.XXXXXX")"
+tempfile="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")"
 trap 'rm -f $tempfile' EXIT INT TERM
 {
     printf '$ %s\n' "$*"

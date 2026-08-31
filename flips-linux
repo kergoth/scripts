@@ -63,7 +63,7 @@ fi
 
 binary="${XDG_DATA_HOME:-$HOME/.local}/bin/flips-linux-binary"
 if ! [ -x "$binary" ]; then
-    tmpdir=$(mktemp -d -t "${0##*/}.XXXXXX")
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
     trap 'rm -rf "$tmpdir"' EXIT
 
     curl -fsSL --output "$tmpdir/flips.zip" https://github.com/Alcaro/Flips/releases/latest/download/flips-linux.zip

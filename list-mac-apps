@@ -258,7 +258,7 @@ list_apps() {
 }
 
 main() {
-    tmpdir=$(mktemp -d)
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
     trap 'rm -rf "$tmpdir"' EXIT
 
     process_arguments "$@"

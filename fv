@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-files="$(mktemp -t "${0##*/}.XXXXX")"
+files="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")"
 fasd -Rflt -B viminfo \
     | fzf-tmux --select-1 --no-sort --multi --query="$*" --exit-0 >"$files"
 if [ -s "$files" ]; then

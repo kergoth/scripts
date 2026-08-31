@@ -47,7 +47,7 @@ if [ $# -eq 0 ]; then
 fi
 
 
-tmpfile=$(mktemp -t "${0##*/}.XXXX")
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT INT TERM
 
 ret=0

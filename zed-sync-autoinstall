@@ -428,7 +428,7 @@ main() {
     fi
 }
 
-tmpdir=$(mktemp -d)
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${scriptname}.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT
 
 main "$@"

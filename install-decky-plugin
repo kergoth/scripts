@@ -271,7 +271,7 @@ if [[ -n "$plugin_name" && $# -gt 1 ]]; then
     exit 1
 fi
 
-tmpdir=$(mktemp -d -t "${0##*/}.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'cleanup' EXIT INT TERM
 
 success_count=0

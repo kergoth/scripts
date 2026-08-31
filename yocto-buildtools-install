@@ -271,7 +271,7 @@ main() {
     # require_linux
     require_tools
 
-    tmpdir=$(mktemp -d -t "${scriptname}.XXXXXX")
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${scriptname}.XXXXXX")
     trap 'rm -rf -- "$tmpdir"' EXIT INT TERM
 
     local arch

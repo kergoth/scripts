@@ -29,7 +29,7 @@ if [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
     exit 1
 fi
 
-tmpdir=$(mktemp -d)
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 # Clean up after ourselves
 trap 'rm -rf "$tmpdir"' EXIT
 # Ensure we leave no child processes behind on interruption or termination

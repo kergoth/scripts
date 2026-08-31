@@ -226,7 +226,7 @@ main() {
 
     process_arguments "$@"
     target=$(target_directory)
-    tmpdir=$(mktemp -d -p "${TMPDIR:-/tmp}" "$scriptname.XXXXXX")
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/$scriptname.XXXXXX")
     trap cleanup EXIT
 
     if [ "${#targets[@]}" -eq 0 ]; then

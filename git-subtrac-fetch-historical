@@ -1,6 +1,6 @@
 #!/bin/sh
 
-tmpfile=$(mktemp -t "${0##*/}.XXXX")
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT INT TERM
 
 export GIT_TERMINAL_PROMPT=0

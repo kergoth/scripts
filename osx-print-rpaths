@@ -5,7 +5,7 @@
 #       cmdsize 48
 #          path @executable_path/../Libraries (offset 12)
 
-sedscript="$(mktemp -t "${0##*/}.XXXXXX")" || exit 1
+sedscript="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")" || exit 1
 trap 'rm -f "$sedscript"' EXIT INT TERM
 cat <<END >"$sedscript"
 /^Load command 19/{

@@ -17,7 +17,7 @@ _fzf() {
 
 query=${*:-}
 query=${query#"$HOME/"}
-tmpdir=$(mktemp -d -t chezmoi-fzf.XXXXXX)
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/chezmoi-fzf.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
 if [ -t 1 ]; then

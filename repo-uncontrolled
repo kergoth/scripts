@@ -1,7 +1,7 @@
 #!/bin/sh -e
 
 repos=$(repo list | cut -d" " -f1)
-reposfile=$(mktemp -t $(basename $0).XXXX)
+reposfile=$(mktemp "${TMPDIR:-/tmp}/$(basename "$0").XXXXXX")
 trap "rm -f $reposfile" EXIT
 
 repo list | cut -d" " -f1 >>$reposfile

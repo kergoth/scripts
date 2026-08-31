@@ -200,7 +200,7 @@ print(json.dumps(cfg['exclusive_tags']))
         output="${epub_title}.epub"
     fi
 
-    tmpdir=$(mktemp -d -p "${TMPDIR:-/tmp}")
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
     trap 'rm -rf "$tmpdir"' EXIT
 
     combined_md="$tmpdir/combined.md"

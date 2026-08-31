@@ -26,7 +26,7 @@ adjust_headers() {
     sed -e 's/--* \(.*\) --*.*/### \1/'
 }
 
-tmpfile=$(mktemp -t "${0##*/}.XXXXXX")
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT INT TERM
 
 jira issue view --plain --comments 999 "$@" |

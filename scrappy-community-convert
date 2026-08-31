@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-tmpdir=$(mktemp -d -t "${0##*/}.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT
 
 templatedir=mnt/mmc/MUOS/application/Scrappy/.scrappy/templates

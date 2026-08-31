@@ -73,8 +73,8 @@ from="$1"
 to="$2"
 shift 2
 
-fromlines="$(mktemp -t "${0##*/}.XXXXXX")"
-tolines="$(mktemp -t "${0##*/}.XXXXXX")"
+fromlines="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")"
+tolines="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")"
 trap 'rm -f $fromlines $tolines' EXIT INT TERM
 
 # shellcheck disable=SC3028

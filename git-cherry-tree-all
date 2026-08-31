@@ -24,7 +24,7 @@ while getopts mh opt; do
 done
 shift $((OPTIND - 1))
 
-tmpfile="$(mktemp -t "${0##*/}.XXXXXX")" || exit 1
+tmpfile="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")" || exit 1
 trap 'rm -f "$tmpfile"' EXIT INT TERM
 
 git for-each-ref --format="%(refname)" "$@" \

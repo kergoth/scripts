@@ -31,7 +31,7 @@ firefox_addons() {
 }
 
 cfgdir="${XDG_CONFIG_HOME:-~/.config}/${0##*/}"
-urlmap="$(mktemp -t "${0##*/}.XXXXXX")" || exit 1
+urlmap="$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")" || exit 1
 trap 'rm -f "$urlmap"' EXIT INT TERM
 
 mkdir -p "$cfgdir"
