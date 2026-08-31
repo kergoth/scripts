@@ -383,6 +383,7 @@
 - **repo-uncontrolled** [sh, none]: Show directories not present in `repo list`.
 - **sherlock** [sh, none]: Run sherlock-project via pipenv from a ghq clone.
 - **surun** [bash, none]: Run command as different user using `su` instead of `sudo`.
+- **template.sh** [bash, none]: Starter template for new Bash scripts.
 - **zed-selectenv** [bash, none]: Search common venv locations for Zed Python env selection.
 - **zed-sync-autoinstall** [bash, -h]: Sync installed Zed extensions to `auto_install_extensions`.
 
