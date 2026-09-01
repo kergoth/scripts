@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["platformdirs"]
 # ///
-"""Auto-tag GoodLinks links by URL host, driven by a rule table.
+"""Auto-tag GoodLinks links by URL host, author, or title, driven by a rule table.
 
 Rules load from a TOML config file (see --config for the default path;
 run with no config present to print the expected format). Dry-run by
@@ -45,35 +45,66 @@ exclude_path = "/(channel|c|user)/|/@"
 hosts = ["youtube.com", "youtu.be"]
 tags = ["to-subscribe"]
 include_path = "/(channel|c|user)/|/@"
+
+[[rule]]
+authors = ["Some Channel Name"]
+tags = ["some-topic"]
+
+[[rule]]
+title = '\\b(some|title|words)\\b'
+tags = ["some-topic"]
 """
 
 
 @dataclass(frozen=True)
 class Rule:
-    """Add tags to links whose host matches, optionally gated by URL path.
+    """Add tags to links matching hosts, authors, and/or title.
 
-    hosts is matched exactly against the URL hostname (minus leading
-    "www."), never against the path or query string, so a host name
-    appearing incidentally elsewhere in a URL can't trigger a rule.
-    include_path/exclude_path are only consulted once hosts has already
-    matched; exclude_path wins if both match.
+    Every matcher present on a rule must match (AND); a rule with more
+    than one matcher type narrows rather than broadens. hosts and
+    authors are sets of literal values, matched exactly (case-
+    insensitive for authors) rather than as substrings or regexes:
+    author names on GoodLinks aren't a controlled vocabulary, and two
+    unrelated channels can share a substring (e.g. "Retro Handhelds"
+    vs. "Joey's Retro Handhelds"), so exact match avoids false
+    positives that regex/substring matching would introduce. hosts is
+    matched against the URL hostname (minus leading "www."), never
+    against the path or query string, so a host name appearing
+    incidentally elsewhere in a URL can't trigger a rule.
+    include_path/exclude_path are only consulted once hosts has
+    already matched; exclude_path wins if both match. title is a
+    single regex matched case-insensitively, since titles are free
+    text where substring/word-boundary matching is the point. A rule
+    must specify at least one matcher, or it would match every link.
     """
 
-    hosts: Iterable[str]
-    tags: Iterable[str]
+    hosts: Iterable[str] = ()
+    tags: Iterable[str] = ()
     include_path: re.Pattern[str] | None = None
     exclude_path: re.Pattern[str] | None = None
+    authors: Iterable[str] = ()
+    title: re.Pattern[str] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hosts", frozenset(self.hosts))
         object.__setattr__(self, "tags", frozenset(self.tags))
+        object.__setattr__(self, "authors", frozenset(a.lower() for a in self.authors))
+        if not (self.hosts or self.authors or self.title):
+            raise ValueError(
+                f"rule with tags {sorted(self.tags)} has no matcher "
+                "(hosts/authors/title)"
+            )
 
-    def matches(self, host: str, url: str) -> bool:
-        if host not in self.hosts:
+    def matches(self, host: str, url: str, title: str, author: str) -> bool:
+        if self.hosts and host not in self.hosts:
             return False
         if self.exclude_path and self.exclude_path.search(url):
             return False
         if self.include_path and not self.include_path.search(url):
+            return False
+        if self.authors and author.lower() not in self.authors:
+            return False
+        if self.title and not self.title.search(title):
             return False
         return True
 
@@ -91,10 +122,12 @@ def load_config(path: Any) -> tuple[list[Rule], set[str]]:
 
     rules = [
         Rule(
-            hosts=r["hosts"],
+            hosts=r.get("hosts", ()),
             tags=r["tags"],
             include_path=re.compile(r["include_path"]) if "include_path" in r else None,
             exclude_path=re.compile(r["exclude_path"]) if "exclude_path" in r else None,
+            authors=r.get("authors", ()),
+            title=re.compile(r["title"], re.IGNORECASE) if "title" in r else None,
         )
         for r in data.get("rule", [])
     ]
@@ -124,12 +157,14 @@ def host_of(url: str) -> str:
 def tags_to_add(link: dict[str, Any], rules: list[Rule], exclusive_tags: set[str]) -> list[str]:
     url = str(link.get("url", ""))
     host = host_of(url)
+    title = str(link.get("title", ""))
+    author = str(link.get("author", ""))
     existing = {str(t) for t in link.get("tags") or []}
     has_exclusive_tag = bool(existing & exclusive_tags)
 
     tags: list[str] = []
     for rule in rules:
-        if not rule.matches(host, url):
+        if not rule.matches(host, url, title, author):
             continue
         for tag in rule.tags:
             if tag in existing or tag in tags:
