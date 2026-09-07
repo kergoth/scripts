@@ -82,7 +82,7 @@ main() {
             printf '%s\n\n' "$cask_args"
         fi
         brew bundle dump --file=- |
-            sed -e '/^[[:space:]]*cask_args[[:space:]]/d' -e '/^vscode/d' -e 's#, args: { appdir: "~/Applications" }##' -e '/^[[:space:]]*$/d' |
+            sed -e '/^[[:space:]]*cask_args[[:space:]]/d' -e '/^#/d' -e '/^vscode/d' -e 's#, args: { appdir: "~/Applications" }##' -e '/^[[:space:]]*$/d' |
             sort -uf
     }
 
