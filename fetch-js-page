@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# Usage: fetch-js-page [--scroll-bottom] URL
+#
+# Fetch a JavaScript-rendered page with Playwright and write its HTML to stdout.
+#
+# Options:
+#     --scroll-bottom  Scroll until page height is stable, loading lazy content
+#     -h, --help        Show this help message
+
+set -euo pipefail
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h, --help/p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+main() {
+    local scroll_bottom=0
+    local url=
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        --scroll-bottom)
+            scroll_bottom=1
+            ;;
+        -h | --help)
+            show_help
+            return
+            ;;
+        -*)
+            printf 'Unknown option: %s\n' "$1" >&2
+            show_help >&2
+            return 2
+            ;;
+        *)
+            if [ -n "$url" ]; then
+                show_help >&2
+                return 2
+            fi
+            url=$1
+            ;;
+        esac
+        shift
+    done
+
+    if [ -z "$url" ]; then
+        show_help >&2
+        return 2
+    fi
+
+    # shellcheck disable=SC2016
+    FETCH_JS_PAGE_SCROLL_BOTTOM=$scroll_bottom FETCH_JS_PAGE_URL=$url npx --yes --package=playwright@1.63.0 sh -ceu '
+        playwright_bin=$(command -v playwright)
+        export NODE_PATH=$(dirname "$(dirname "$playwright_bin")")
+
+        node <<'"'"'NODE'"'"'
+const { chromium } = require("playwright");
+
+(async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+        const page = await browser.newPage();
+        await page.goto(process.env.FETCH_JS_PAGE_URL, {
+            waitUntil: "networkidle",
+            timeout: 30_000,
+        });
+        if (process.env.FETCH_JS_PAGE_SCROLL_BOTTOM === "1") {
+            const deadline = Date.now() + 30_000;
+            let stablePasses = 0;
+
+            while (stablePasses < 2) {
+                if (Date.now() >= deadline) {
+                    throw new Error("Page did not stabilize within 30 seconds");
+                }
+
+                const previousHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+                await page.evaluate((height) => window.scrollTo(0, height), previousHeight);
+                await page.waitForTimeout(500);
+                const currentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+                stablePasses = currentHeight === previousHeight ? stablePasses + 1 : 0;
+            }
+        }
+        process.stdout.write(await page.content());
+    } finally {
+        await browser.close();
+    }
+})().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+});
+NODE
+    '
+}
+
+main "$@"
