@@ -9,6 +9,7 @@
 - `none` scripts are typically one-or-two liners; reading them is cheap.
 
 ## bitbake / yocto (`bb-*`, `bitbake-*`, `yocto-*`, `oe*`, `clean-sstate`)
+
 - **bb-buildlist** [sh, none]: Run `bitbake -g`, print resulting `pn-buildlist`.
 - **bb-clean** [sh, none]: Shorthand for `bitbake -c clean "$@"`. **DESTRUCTIVE**.
 - **bb-fetch** [sh, none]: Shorthand for `bitbake -c fetch "$@"`.
@@ -31,6 +32,7 @@
 - **yocto-releases** [python (uv), argparse]: Fetch and display Yocto release table from upstream wiki.
 
 ## homebrew (`brew-*`, `brewa*`, `brewu`, `brewv*`, `adminbrew`, `admindo`, `install-brew`)
+
 - **adminbrew** [sh, none]: Run brew as the admin user via `admindo`.
 - **admindo** [sh, none]: Run a command as `OSX_ADMIN_LOGNAME` via `surun`/`su`.
 - **brew-cask-sizes** [sh, none]: `du -s` of every Caskroom entry, sorted descending.
@@ -51,11 +53,13 @@
 - **install-brew** [sh, -h]: Install homebrew to a custom prefix, optionally split prefix/repo.
 
 ## chezmoi (`edot*`, `list-chezmoi-repos`)
+
 - **edot** [bash, none]: Fuzzy-match chezmoi-managed files via fzf, edit with `chezmoi edit --watch --apply`.
 - **edot.ps1** [pwsh, none]: Windows port of `edot` using PSFzf.
 - **list-chezmoi-repos** [bash, none]: Search GitHub for top dotfiles+chezmoi repos by stars.
 
 ## git wrappers (`git-*`, `ghq-*`, `gitignore`, `find_forks`, `github-*`)
+
 - **find_forks** [sh, none]: Run frost-nzcr4/find_forks against current repo via venv.
 - **ghq-clone** [sh, none]: Clone via ghq cache, then re-point remote upstream.
 - **ghq-fetch** [sh, none]: Fetch into ghq mirror in parallel for all remotes.
@@ -110,21 +114,25 @@
 - **gitignore** [sh, none]: `curl gitignore.io/api/...` to fetch a template.
 
 ## AI agent CLI wrappers (`agp`, `cdxp`, `clp`)
+
 - **agp** [bash, -h]: Wrapper for `agent -p --trust` with stdin/markdown formatting.
 - **cdxp** [bash, -h]: Wrapper for `codex exec --full-auto` with stdin/markdown formatting.
 - **clp** [bash, -h]: Wrapper for `claude -p` with stdin/markdown formatting.
 
 ## Jira (`jira-*`)
+
 - **jira-to-notes** [bash, none]: Format jira-cli view output as markdown notes.
 - **jira-to-project** [bash, -h]: Render Jira data into a project directory.
 - **jira-view** [sh, none]: Tput-colored formatter for jira issue lists.
 
 ## Nix
+
 - **nix-clean** [sh, none]: Expire generations, GC, and optimize Nix store. **DESTRUCTIVE**.
 - **nixrun** [bash, passthru]: `nix run nixpkgs#<pkg>` shortcut.
 - **nixshell** [bash, none]: `nix-shell --run` wrapper that quotes args correctly.
 
 ## CSV utilities (`csv*`)
+
 - **csvaddrow** [python, argparse]: Append a CSV row with values defined by Python expressions.
 - **csvcurrencyformat** [sh, none]: Format CSV columns as currency via csvpyrow.
 - **csvdelcol** [python, none]: Delete named column(s) from CSV.
@@ -135,6 +143,7 @@
 - **csvsum** [sh, none]: Sum the first column of a CSV.
 
 ## comm/diff/dupe utilities (`comm-*`, `dirdiff-*`, `fclones-*`, `dupes-*`, `kdedup`, `same-file`, `fgroups-format`)
+
 - **comm-cmd** [sh, none]: Run two commands and `comm` their stdout.
 - **comm-files** [sh, -h]: Compare two directories' file listings via comm.
 - **comm-to-difflike** [sh, none]: Convert comm output to diff-like ±/space prefixes.
@@ -155,6 +164,7 @@
 - **same-file** [bash, none]: Exit 0 iff all paths share inode+device.
 
 ## fd / fzf / vim helpers (`fd*`, `fde`, `fdv`, `fv`, `gv`, `gvf`, `vim*`, `editin`)
+
 - **e** [sh, none]: Edit via `$VISUAL`/`$EDITOR`, swapping sync GUIs to async.
 - **editin** [sh, none]: Edit files listed on stdin via `$VISUAL`.
 - **fde** [bash, none]: `fd -p -t f "$@" | editin`.
@@ -173,6 +183,7 @@
 - **vimsession** [sh, none]: Open `Session.vim` (walking up from CWD).
 
 ## tmux / dvtm (`tmux-*`, `tmx`, `att*`, `dvtm-*`, `peek`)
+
 - **att** [sh, -h]: Attach abduco/dvtm session, importing env vars.
 - **att-env** [sh, none]: `cat $ATT_ENV` (helper for att session env reattach).
 - **dvtm-editor-copy** [sh, none]: Run dvtm-editor and copy result via pbcopy.
@@ -189,6 +200,7 @@
 - **tmx** [sh, -h]: Create/list/kill tmux session groups.
 
 ## macOS-only (`osx-*`, `darkmode`, `cleaneject`, `mkalias`, `mdfind-all`, `cd-rip`, `cdr2iso`, `cue-rip`, `bin2iso`, `bmaptool-sd`, `ddimage-sd`, `download-ted-talk`, `duti-*`, `firefox-*`, `get-webloc-url`, `icns-to-png`, `list-mac-apps`, `metadate`, `new-webloc`, `recreate-iso`, `safari-webapp-cache-clean`, `setfiledate`, `setfile-create-date`, `creationdate`)
+
 - **bmaptool-sd** [sh, none]: Run bmaptool against macOS internal SD card reader.
 - **bin2iso** [sh, none]: Convert .bin/.cue or .toc to ISO via bchunk.
 - **cd-rip** [sh, -h]: Rip a CD using diskutil-detected device.
@@ -223,6 +235,7 @@
 - **setfiledate** [bash, -h]: Set file dates from a unix timestamp argument.
 
 ## Linux/Debian/Arch/FreeBSD pkg utilities (`pacman-*`, `dpkg-sizes`, `pkg-sizes`, `ipk*`)
+
 - **dpkg-sizes** [sh, none]: Top 25 largest installed dpkg packages.
 - **ipkcontents** [sh, none]: List contents of an `.ipk` file.
 - **ipkinfo** [sh, none]: Print control metadata of an `.ipk` file.
@@ -234,6 +247,7 @@
 - **pkg-sizes** [sh, none]: FreeBSD `pkg info -as` top 20 by size.
 
 ## SteamOS / handheld / retro (`build-allium`, `build-onion`, `decky-linux`, `flips-linux`, `install-decky-plugin`, `scrappy-community-convert`)
+
 - **build-allium** [bash, none]: Build Allium for handheld via Docker (auto-starts colima on macOS).
 - **build-onion** [bash, -h]: Build OnionUI for Miyoo Mini Flip via Docker.
 - **decky-linux** [bash, none]: Decky Loader install/control script (Linux).
@@ -242,18 +256,21 @@
 - **scrappy-community-convert** [bash, none]: Convert Scrappy templates to muxzip format.
 
 ## Workspace projects (`workspace-*`)
+
 - **workspace-list** [python (uv), argparse]: List `$WORKSPACE_DIR` projects (default `~/Workspace`) and ghq worktrees (`$GHQ_ROOT`); optional Jira via `jira` CLI.
 - **workspace-pick** [bash, -h]: fzf-select a workspace and print its path to stdout.
 - **workspace-open** [bash, -h]: fzf-select a workspace and open it in `$WORKSPACE_EDITOR` (default: zed).
 - **workspace-describe** [sh, none]: Cache Jira summaries to `.description` files via `workspace-list --jira --cache-desc`.
 
 ## DevPod / containers (`devpod-*`, `cached-retool`, `distrobox-create-chimera`)
+
 - **cached-retool** [python (uv), --help]: Caching wrapper for retool that hashes inputs.
 - **devpod-list** [python (uv), argparse]: List DevPod workspaces with rich-formatted tables.
 - **devpod-stop** [bash, -h]: Parallel-stop DevPod workspaces with escalating fallback.
 - **distrobox-create-chimera** [bash, none]: Create a chimera distrobox with mount/doas pre-init.
 
 ## Path / filesystem helpers (`abs_readlink`, `abspath`, `normpath`, `relpath`, `path_join`, `add-unlisted-summaries`, `dead-symlinks`, `dirinfo`, `find-newest`, `find-oldest`, `iln`, `lstree`, `mvd`, `newest`, `oldest`, `prune-under-markers`, `remove-empty-dirs`, `resolve-alias`, `resolvelink`, `resolvelinks`, `datefind`)
+
 - **abs_readlink** [sh, none]: Print absolute path of symlink target(s).
 - **add-unlisted-summaries** [sh, none]: Add synthetic summaries for unlisted directory children in a path stream.
 - **abspath** [sh, -h]: Print absolute version of each PATH (relative-to override).
@@ -277,6 +294,7 @@
 - **resolvelinks** [sh, none]: Recursively resolve every symlink in a tree. **DESTRUCTIVE**.
 
 ## rsync / sync / library (`chunked-rsync`, `library-sync`, `libsync`, `rsync-images`, `rsync-reflink`)
+
 - **chunked-rsync** [bash, none]: Run rsync in alphabetical-prefix chunks for huge trees.
 - **library-sync** [bash, -h]: Sync game library to device using config-driven libsync.
 - **libsync** [bash, -h]: rsync wrapper with archive extraction at destination.
@@ -284,6 +302,7 @@
 - **rsync-reflink** [bash, -h]: Reflink-copy local rsync transfers for speed.
 
 ## Process / wait helpers (`kkill`, `psgrep`, `ppsgrep`, `wait-for-*`, `detach`, `time-stats`, `test-sequence-time`, `rusage-readable`)
+
 - **detach** [sh, none]: `nohup` background with quick exit-code on early failure.
 - **kkill** [sh, none]: Kill processes matching pattern with escalating signals/delays. **DESTRUCTIVE**.
 - **ppsgrep** [sh, none]: `ps` showing pgrep-matching processes with sids.
@@ -297,6 +316,7 @@
 - **wait-for-process** [sh, -h]: Wait for a process to exit (and optionally to start).
 
 ## Clipboard / WSL / Windows interop (`pbcopy`, `pbpaste`, `mklink`, `wslpath`, `wsl-nativefier`, `wsl-notify`, `codewait*`)
+
 - **codewait** [sh, passthru]: `code -w "$@"` shorthand.
 - **codewait.cmd** [cmd, none]: Windows variant: `code --new-window --wait %*`.
 - **mklink** [sh, none]: `cmd.exe /c mklink` with WSL path translation.
@@ -307,6 +327,7 @@
 - **wslpath** [sh, none]: Print WSL `/bin/wslpath` usage and forward args.
 
 ## Text / line helpers (`first-to-last`, `group-by-column`, `nlxargs`, `printargs`, `printcmd`, `quote-args`, `select-random`, `sponge`, `startswith`, `strip-color-codes`, `strip-emoji`, `sum`, `uniq-seen`, `uniq-seen-last`, `xargs-paste`, `glob-to-regex`, `urljoin`, `urlencode`, `urldecode`, `extract-md-links`, `pup-links`, `grab-links`)
+
 - **extract-md-links** [sh, -h]: Extract links from markdown via cmark + pup.
 - **first-to-last** [bash, none]: Move arg1 to end (xargs convenience).
 - **glob-to-regex** [python, argparse]: Translate glob patterns to regex.
@@ -331,8 +352,10 @@
 - **xargs-paste** [sh, none]: Run command per stdin line, paste output as second column.
 
 ## HTTP / web / archive.org (`cmdfu`, `download-webofstories`, `httpless`, `gist-cmd`, `update-gist-generic`, `ia-info`, `ia-parallel-download`, `phantomget`, `pinboard-add`)
+
 - **cmdfu** [bash, none]: Query commandlinefu by pattern.
 - **download-webofstories** [sh, none]: Scrape webofstories.com videos by speaker.
+- **fetch-js-page** [bash, -h/--help]: Render a URL with Playwright and write its HTML to stdout without a local Node project; `--scroll-bottom` hydrates lazy content.
 - **gist-cmd** [sh, none]: Run command and post command+output as a gh gist.
 - **httpless** [sh, none]: `httpie | less -R` with colors and headers preserved.
 - **ia-info** [bash, none]: Internet Archive metadata with file size summary (jq formatted).
@@ -342,9 +365,11 @@
 - **update-gist-generic** [bash, -h]: Update a github gist file from stdin or file.
 
 ## Calibre (`calibre-*`)
+
 - **calibre-merge-asin-dupes** [python, argparse]: Merge duplicate calibre books sharing a mobi-asin identifier; keeps the rated entry, copies unique formats over, removes losers. Dry-run by default; `--execute` writes. Calibre must not be running. **DESTRUCTIVE** on `--execute`.
 
 ## GoodLinks maintenance (`goodlinks-*`)
+
 - **goodlinks-articles** [bash, -h]: Filter goodlinksctl JSON to unread saves
   that are plain articles.
 - **goodlinks-autotag** [python, argparse]: Auto-tag GoodLinks links by URL host, driven by a rule table. Dry-run by default; `--apply` writes tags via `goodlinksctl`.
@@ -362,6 +387,7 @@
   read on stdin. Fetches full article content for each item and compiles them with pandoc.
 
 ## Reading / Reader / personal info (`reader-tools`, `reader-views`, `ssa-total-earnings`, `ofxdate`, `canonical-url`, `favicon-url`)
+
 - **canonical-url** [bash, -h]: Print the canonical URL for each given URL (dedupe-friendly).
 - **favicon-url** [bash, -h]: Print the favicon URL for each given URL, falling back to `/favicon.ico`.
 - **ofxdate** [python, none]: Print end_date of OFX/QFX statement file as Unix epoch.
@@ -370,6 +396,7 @@
 - **ssa-total-earnings** [sh, none]: Sum MedicareEarnings from SSA XML statement.
 
 ## Miscellaneous (one-offs)
+
 - **ack** [perl, --help]: Vendored `ack` 3.8.1 grep tool (full Perl distribution).
 - **beep** [sh, none]: `printf '\a'`.
 - **bgrm** [sh, -h]: Move-aside then background-rm of paths. **DESTRUCTIVE**.
@@ -390,6 +417,7 @@
 - **zed-sync-autoinstall** [bash, -h]: Sync installed Zed extensions to `auto_install_extensions`.
 
 ## Dotfiles and package management
+
 - **chezmoi-diff-managed** [bash, --help]: Compare managed chezmoi targets to their rendered baselines.
 - **chezmoi-edit-encrypted** [sh, -h]: Decrypt, edit, and re-encrypt a chezmoi-managed file. **DESTRUCTIVE**.
 - **mas-check-pricing** [bash, -h]: Report pricing and optional in-app purchases for `mas` entries from files or stdin.
@@ -403,4 +431,3 @@
 - **macos-update-all** [sh, none]: Install available macOS software updates. **DESTRUCTIVE**.
 - **ludusavi-restic-backup** [bash, -h]: Back up Ludusavi saves to the configured Restic repository. **DESTRUCTIVE**.
 - **ludusavi-restic-restore** [bash, -h]: Restore Ludusavi saves from the configured Restic repository. **DESTRUCTIVE**.
-
