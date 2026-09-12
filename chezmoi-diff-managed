@@ -152,7 +152,13 @@ can_use_jd() {
     local target_path=$2
 
     if ! command -v jd >/dev/null 2>&1; then
-        return 1
+        if ! command -v nix >/dev/null 2>&1; then
+            return 1
+        else
+            jd() {
+                nix run nixpkgs#jd-diff-patch -- "$@"
+            }
+        fi
     fi
 
     if [[ "$target_path" =~ \.json$ ]]; then
