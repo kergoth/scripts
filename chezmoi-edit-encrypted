@@ -11,18 +11,28 @@ if [ $# -ne 1 ]; then
 fi
 
 filepath="$1"
-if [ -f "$filepath" ]; then
-    chezmoi decrypt "$filepath" >"$tmpfile" || {
-        echo "Failed to decrypt $filepath" >&2
+if sourcepath=$(chezmoi source-path "$filepath" 2>/dev/null); then
+    targetpath="$filepath"
+elif targetpath=$(chezmoi target-path "$filepath" 2>/dev/null); then
+    sourcepath="$filepath"
+else
+    echo >&2 "Error: unmanaged file: $filepath"
+    exit 1
+fi
+
+if [ -f "$sourcepath" ]; then
+    chezmoi decrypt "$sourcepath" >"$tmpfile" || {
+        echo "Failed to decrypt $sourcepath" >&2
         exit 1
     }
 else
     touch "$tmpfile"
 fi
 ${VISUAL:-${EDITOR:-vi}} "$tmpfile"
-chezmoi encrypt "$tmpfile" >"$filepath.new" || {
-    rm -f "$filepath.new"
-    echo "Failed to encrypt $filepath" >&2
+chezmoi encrypt "$tmpfile" >"$sourcepath.new" || {
+    rm -f "$sourcepath.new"
+    echo "Failed to encrypt $sourcepath" >&2
     exit 1
 }
-mv "$filepath.new" "$filepath"
+mv "$sourcepath.new" "$sourcepath"
+chezmoi apply "$targetpath"
