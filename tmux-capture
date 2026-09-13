@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+#
+# tmux-capture - run a command in a private tmux server and write its ANSI pane capture.
+#
+# Usage: tmux-capture [--delay SECONDS] [--shell SHELL_COMMAND] [--ready-pattern REGEX] [--ready-timeout SECONDS] -- COMMAND [ARG...]
+#
+# Runs COMMAND in an interactive shell in an isolated tmux server. Without
+# --delay, detach from that session when the command reaches the desired state;
+# the pane is then written to standard output. With --delay, it captures
+# automatically after SECONDS instead of attaching.
+#
+# Examples:
+#     tmux-capture -- hx
+#     tmux-capture --delay 1 -- eza --long
+#     tmux-capture --shell 'zsh -i' --ready-pattern '❯' -- vim vimrc
+#
+# Options:
+#     --delay SECONDS         Capture automatically after SECONDS
+#     --shell SHELL_COMMAND   Run SHELL_COMMAND in the pane instead of $SHELL -i
+#     --ready-pattern REGEX   Wait until the pane matches REGEX before typing COMMAND
+#     --ready-timeout SECONDS Fail if the ready pattern does not appear within SECONDS (default: 5)
+#     -h, --help              Show this help message
+
+set -euo pipefail
+
+scriptname=${BASH_SOURCE[0]##*/}
+server_name=
+server_started=0
+delay=
+shell_command=
+ready_pattern=
+ready_timeout=5
+declare -a tmux_cmd
+
+usage() {
+    sed -n '/^# Usage:/,/^#     -h, --help/p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+die() {
+    printf '%s: %s\n' "$scriptname" "$*" >&2
+    exit 1
+}
+
+cleanup() {
+    if [ "$server_started" -eq 1 ]; then
+        tmux_command kill-server >/dev/null 2>&1 || true
+    fi
+}
+
+select_tmux() {
+    if command -v tmux >/dev/null 2>&1; then
+        tmux_cmd=(tmux)
+    elif command -v nix >/dev/null 2>&1; then
+        tmux_cmd=(nix run nixpkgs#tmux --)
+    else
+        die 'tmux is unavailable and nix is not installed'
+    fi
+}
+
+tmux_command() {
+    env -u TMUX "${tmux_cmd[@]}" -L "$server_name" "$@"
+}
+
+wait_for_ready() {
+    local pane
+    local deadline=$((SECONDS + ready_timeout))
+
+    while :; do
+        if ! pane=$(tmux_command capture-pane -p -e -t tmux-capture:0.0); then
+            sleep 0.1
+            continue
+        fi
+        if printf '%s\n' "$pane" | grep -E -- "$ready_pattern" >/dev/null; then
+            return
+        fi
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            die "ready pattern did not appear within ${ready_timeout} seconds: $ready_pattern"
+        fi
+        sleep 0.1
+    done
+}
+
+command_line() {
+    local arg
+    local line=
+
+    for arg in "$@"; do
+        printf -v arg '%q' "$arg"
+        line+="$arg "
+    done
+
+    printf '%s' "${line% }"
+}
+
+main() {
+    local line
+    local separator_found=0
+    local -a command_args=()
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --delay)
+                [ "$#" -ge 2 ] || die '--delay requires a value'
+                delay=$2
+                shift 2
+                ;;
+            --shell)
+                [ "$#" -ge 2 ] || die '--shell requires a command'
+                shell_command=$2
+                shift 2
+                ;;
+            --ready-pattern)
+                [ "$#" -ge 2 ] || die '--ready-pattern requires a regular expression'
+                ready_pattern=$2
+                shift 2
+                ;;
+            --ready-timeout)
+                [ "$#" -ge 2 ] || die '--ready-timeout requires a value'
+                ready_timeout=$2
+                shift 2
+                ;;
+            --help | -h)
+                usage
+                return
+                ;;
+            --)
+                separator_found=1
+                shift
+                command_args=("$@")
+                break
+                ;;
+            *)
+                die "unknown option: $1"
+                ;;
+        esac
+    done
+
+    [ "$separator_found" -eq 1 ] || die 'separate options from COMMAND with --'
+    [ "${#command_args[@]}" -gt 0 ] || die 'COMMAND is required after --'
+
+    if [ -n "$delay" ] && ! [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        die '--delay must be a non-negative number of seconds'
+    fi
+    if ! [[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]]; then
+        die '--ready-timeout must be a positive whole number of seconds'
+    fi
+
+    select_tmux
+    server_name="tmux-capture-$$-$RANDOM"
+    trap cleanup EXIT
+
+    if [ -n "$shell_command" ]; then
+        tmux_command -f /dev/null new-session -d -s tmux-capture "$shell_command"
+    else
+        tmux_command -f /dev/null new-session -d -s tmux-capture "${SHELL:-/bin/sh}" -i
+    fi
+    server_started=1
+
+    if [ -n "$ready_pattern" ]; then
+        wait_for_ready
+    fi
+
+    line=$(command_line "${command_args[@]}")
+    tmux_command send-keys -t tmux-capture:0.0 -l -- "$line"
+    tmux_command send-keys -t tmux-capture:0.0 Enter
+
+    if [ -n "$delay" ]; then
+        sleep "$delay"
+    else
+        printf 'Detach from the private tmux session to capture the pane.\n' >&2
+        tmux_command attach-session -t tmux-capture
+    fi
+
+    tmux_command capture-pane -p -e -t tmux-capture:0.0
+}
+
+main "$@"

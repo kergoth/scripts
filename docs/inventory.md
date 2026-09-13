@@ -190,6 +190,7 @@
 - **dvtm-kergoth-status** [sh, none]: Per-id dvtm status fifo loop.
 - **dvtm-print-status** [bash, -h]: Format dvtm status string from {key} placeholders.
 - **peek** [sh, none]: Open `$EDITOR` in a tmux split-window pane (33% size).
+- **tmux-capture** [sh, -h/--help]: Run a command in an isolated interactive tmux server and capture its pane.
 - **tmux-kill-session-group** [sh, none]: Kill all sessions in a tmux session_group.
 - **tmux-link** [sh, none]: Spawn unique session linked to a base, kill on detach.
 - **tmux-ls-group-sessions** [sh, none]: List sessions in a session_group.
