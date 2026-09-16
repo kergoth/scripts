@@ -16,8 +16,9 @@ if sourcepath=$(chezmoi source-path "$filepath" 2>/dev/null); then
 elif targetpath=$(chezmoi target-path "$filepath" 2>/dev/null); then
     sourcepath="$filepath"
 else
-    echo >&2 "Error: unmanaged file: $filepath"
-    exit 1
+    # Unmanaged
+    sourcepath="$filepath"
+    targetpath=
 fi
 
 if [ -f "$sourcepath" ]; then
@@ -35,4 +36,7 @@ chezmoi encrypt "$tmpfile" >"$sourcepath.new" || {
     exit 1
 }
 mv "$sourcepath.new" "$sourcepath"
-chezmoi apply "$targetpath"
+
+if [ -n "$targetpath" ]; then
+    chezmoi apply "$targetpath"
+fi
