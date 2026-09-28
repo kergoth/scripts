@@ -1,0 +1,627 @@
+#!/usr/bin/env bash
+# Usage: git-worktree-jira-status [options]
+#
+# List linked git worktrees with Jira issue status, and optionally remove
+# worktrees whose issues are in status category done.
+#
+# Examples:
+#     git worktree-jira-status
+#     git worktree-jira-status --prune -n
+#
+# Options:
+#     -p, --prune       Remove eligible worktrees after confirmation
+#     -n, --dry-run     With --prune: show intended removals; change nothing
+#     -y, --yes         Skip confirmation; required with --prune when non-interactive
+#         --plain       Tab-separated machine-readable output (with header)
+#     -v                Increase verbosity
+#     -q                Decrease verbosity
+#     -h                Show this help message
+
+set -euo pipefail
+
+# shellcheck disable=SC2034
+scriptdir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+scriptname=${BASH_SOURCE[0]##*/}
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+process_arguments() {
+    local arg
+    local -a arguments=()
+    local quiet_seen=0
+    local verbose_seen=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --prune) arguments+=(-p) ;;
+            --dry-run) arguments+=(-n) ;;
+            --yes) arguments+=(-y) ;;
+            --plain) plain=1 ;;
+            --help) arguments+=(-h) ;;
+            --quiet) arguments+=(-q) ;;
+            --verbose) arguments+=(-v) ;;
+            --)
+                arguments+=(--)
+                shift
+                arguments+=("$@")
+                break
+                ;;
+            *) arguments+=("$1") ;;
+        esac
+        shift
+    done
+
+    if [ "${#arguments[@]}" -gt 0 ]; then
+        set -- "${arguments[@]}"
+    else
+        set --
+    fi
+    OPTIND=1
+    while getopts ':pnyqvh' arg; do
+        case "$arg" in
+            p) do_prune=1 ;;
+            n) dry_run=1 ;;
+            y) assume_yes=1 ;;
+            q)
+                quiet_seen=1
+                verbosity=$((verbosity - 1))
+                ;;
+            v)
+                verbose_seen=1
+                verbosity=$((verbosity + 1))
+                ;;
+            h)
+                show_help
+                exit 0
+                ;;
+            \?) die 1 "Unknown option: -$OPTARG" ;;
+            :) die 1 "Option -$OPTARG requires an argument" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    if [ "$#" -ne 0 ]; then
+        die 1 "Unexpected argument: $1"
+    fi
+    if { [ "$dry_run" -eq 1 ] || [ "$assume_yes" -eq 1 ]; } &&
+        [ "$do_prune" -eq 0 ]; then
+        die 1 "--dry-run and --yes require --prune"
+    fi
+    if [ "$quiet_seen" -eq 1 ] && [ "$verbose_seen" -eq 1 ]; then
+        die 1 "--quiet and --verbose cannot be used together"
+    fi
+}
+
+die() {
+    local status=$1
+    shift
+
+    printf '%s: %s\n' "$scriptname" "$*" >&2
+    exit "$status"
+}
+
+msg_info() {
+    if [ "$verbosity" -ge 0 ]; then
+        printf '%s\n' "$*" >&2
+    fi
+}
+
+run() {
+    if [ "$verbosity" -gt 0 ]; then
+        printf 'Running:'
+        printf ' %q' "$@"
+        printf '\n'
+    fi >&2
+    "$@"
+}
+
+require_cmds() {
+    local cmd
+
+    for cmd in "$@"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            die 2 "required command not found: $cmd"
+        fi
+    done
+}
+
+require_non_bare_worktree() {
+    local bare
+    local inside
+
+    if ! inside=$(git rev-parse --is-inside-work-tree 2>/dev/null); then
+        die 3 "not inside a git worktree"
+    fi
+    if ! bare=$(git rev-parse --is-bare-repository 2>/dev/null); then
+        die 3 "cannot determine repository type"
+    fi
+    if [ "$inside" != true ] || [ "$bare" = true ]; then
+        die 3 "not inside a non-bare git worktree"
+    fi
+}
+
+append_worktree() {
+    if [ "$entry_bare" -eq 0 ] && [ -z "$entry_branch" ]; then
+        entry_detached=1
+    fi
+    worktree_paths+=("$entry_path")
+    worktree_heads+=("$entry_head")
+    worktree_branches+=("$entry_branch")
+    worktree_bare+=("$entry_bare")
+    worktree_detached+=("$entry_detached")
+    worktree_locked+=("$entry_locked")
+    worktree_prunable+=("$entry_prunable")
+}
+
+list_worktrees() {
+    local field
+    local -a fields=()
+    local entry_path=
+    local entry_head=
+    local entry_branch=
+    local entry_bare=0
+    local entry_detached=0
+    local entry_locked=0
+    local entry_prunable=0
+
+    worktree_paths=()
+    worktree_heads=()
+    worktree_branches=()
+    worktree_bare=()
+    worktree_detached=()
+    worktree_locked=()
+    worktree_prunable=()
+    mapfile -d '' -t fields < <(git worktree list --porcelain -z)
+    for field in "${fields[@]}"; do
+        if [ -z "$field" ]; then
+            if [ -n "$entry_path" ]; then
+                append_worktree
+            fi
+            entry_path=
+            entry_head=
+            entry_branch=
+            entry_bare=0
+            entry_detached=0
+            entry_locked=0
+            entry_prunable=0
+            continue
+        fi
+
+        case "$field" in
+            'worktree '*) entry_path=${field#worktree } ;;
+            'HEAD '*) entry_head=${field#HEAD } ;;
+            'branch '*) entry_branch=${field#branch } ;;
+            bare) entry_bare=1 ;;
+            detached) entry_detached=1 ;;
+            locked | 'locked '*) entry_locked=1 ;;
+            prunable | 'prunable '*) entry_prunable=1 ;;
+        esac
+    done
+    if [ -n "$entry_path" ]; then
+        append_worktree
+    fi
+}
+
+extract_keys_from_name() {
+    local name=$1
+    local segment
+    local key
+    local rest
+    local -a segments=()
+
+    name=${name#refs/heads/}
+    # Per-segment matching implements
+    # (^|/)([A-Z][A-Z0-9]+-[0-9]+)(_|/|$).
+    IFS=/ read -r -a segments <<<"$name"
+    for segment in "${segments[@]}"; do
+        rest=$segment
+        while [[ $rest =~ ^([A-Z][A-Z0-9]+-[0-9]+)(_|$) ]]; do
+            key=${BASH_REMATCH[1]}
+            printf '%s\n' "$key"
+            if [ "${BASH_REMATCH[2]}" != _ ]; then
+                break
+            fi
+            rest=${rest#"${BASH_REMATCH[0]}"}
+        done
+    done
+}
+
+unique_keys() {
+    local key
+    local seen=
+
+    while IFS= read -r key; do
+        if [ -n "$key" ] && [[ $'\n'$seen$'\n' != *$'\n'"$key"$'\n'* ]]; then
+            printf '%s\n' "$key"
+            seen+="${seen:+$'\n'}$key"
+        fi
+    done
+}
+
+resolve_issue_for_worktree() {
+    local branch=$1
+    local path=$2
+    local basename=${path##*/}
+    local -a branch_keys=()
+    local -a basename_keys=()
+
+    mapfile -t branch_keys < <(extract_keys_from_name "$branch" | unique_keys)
+    mapfile -t basename_keys < <(
+        extract_keys_from_name "$basename" | unique_keys
+    )
+
+    issue_key=
+    classification=no-jira
+    if [ "${#branch_keys[@]}" -gt 1 ] ||
+        [ "${#basename_keys[@]}" -gt 1 ]; then
+        classification=ambiguous
+    elif [ "${#branch_keys[@]}" -eq 1 ] &&
+        [ "${#basename_keys[@]}" -eq 1 ] &&
+        [ "${branch_keys[0]}" != "${basename_keys[0]}" ]; then
+        classification=ambiguous
+    elif [ "${#branch_keys[@]}" -eq 1 ]; then
+        issue_key=${branch_keys[0]}
+        classification=unknown
+    elif [ "${#basename_keys[@]}" -eq 1 ]; then
+        issue_key=${basename_keys[0]}
+        classification=unknown
+    fi
+}
+
+fetch_jira_statuses() {
+    local key
+
+    for key in "${report_issues[@]}"; do
+        if [ -z "$key" ] || [[ -v "jira_statuses[$key]" ]]; then
+            continue
+        fi
+        if ! fetch_jira_entry "$key"; then
+            die 4 "invalid Jira response for $key"
+        fi
+        jira_statuses["$key"]=$fetched_jira_entry
+    done
+}
+
+fetch_jira_entry() {
+    local key=$1
+    local response
+
+    fetched_jira_entry=
+    if ! response=$(jira issue view "$key" --raw); then
+        return 1
+    fi
+    if ! fetched_jira_entry=$(
+        jq -r --arg key "$key" '
+            if type == "object" and .key == $key
+                and (.fields.status.name | type == "string" and length > 0)
+                and (
+                    .fields.status.statusCategory.key
+                    | type == "string" and length > 0
+                )
+            then
+                .fields.status.name + "|"
+                + .fields.status.statusCategory.key
+            else
+                empty
+            end
+        ' <<<"$response" 2>/dev/null
+    ) || [ -z "$fetched_jira_entry" ]; then
+        return 1
+    fi
+}
+
+classify_safety() {
+    local index=$1
+    local path=${worktree_paths[index]}
+    local worktree_classification=${report_classifications[index]}
+    local canonical_path=
+    local status=
+    local inspect_failed=0
+    local missing=0
+    local dirty=0
+
+    if [ "${worktree_prunable[index]}" -eq 1 ]; then
+        safety=prunable
+        return
+    fi
+    if [ "${worktree_bare[index]}" -eq 1 ]; then
+        safety=bare
+        return
+    fi
+    if [ "${worktree_detached[index]}" -eq 1 ]; then
+        safety=detached
+        return
+    fi
+    if ! canonical_path=$(cd "$path" 2>/dev/null && pwd -P); then
+        missing=1
+    elif ! status=$(git -C "$path" status --porcelain 2>/dev/null); then
+        inspect_failed=1
+    elif [ -n "$status" ]; then
+        dirty=1
+    fi
+
+    if [ "$missing" -eq 1 ]; then
+        safety=missing
+    elif [ "$inspect_failed" -eq 1 ]; then
+        safety=inspect-failed
+    elif [ "${worktree_locked[index]}" -eq 1 ]; then
+        safety=locked
+    elif [ "$index" -eq 0 ]; then
+        safety=main
+    elif [[ $current_directory == "$canonical_path" ||
+        $current_directory == "$canonical_path/"* ]]; then
+        safety=current
+    elif [ "$dirty" -eq 1 ]; then
+        safety=dirty
+    elif [ "$worktree_classification" = candidate ]; then
+        safety=ok
+    else
+        safety=n/a
+    fi
+}
+
+build_report() {
+    local index
+    local branch
+
+    for index in "${!worktree_paths[@]}"; do
+        branch=${worktree_branches[index]#refs/heads/}
+        if [ -z "$branch" ]; then
+            branch=${worktree_heads[index]:0:7}
+            branch=${branch:-detached}
+        fi
+        report_branches+=("$branch")
+        resolve_issue_for_worktree "$branch" "${worktree_paths[index]}"
+        report_issues+=("$issue_key")
+        report_statuses+=("")
+        report_classifications+=("$classification")
+    done
+}
+
+classify_report() {
+    local index
+    local jira_status
+    local jira_category
+
+    for index in "${!worktree_paths[@]}"; do
+        if [ "${report_classifications[index]}" = unknown ]; then
+            jira_status=${jira_statuses[${report_issues[index]}]}
+            jira_category=${jira_status##*|}
+            jira_status=${jira_status%|*}
+            report_statuses[index]=$jira_status
+            if [ "$jira_category" = "done" ]; then
+                report_classifications[index]=candidate
+            else
+                report_classifications[index]=active
+            fi
+        fi
+        classify_safety "$index"
+        report_safeties+=("$safety")
+    done
+}
+
+validate_plain_paths() {
+    local path
+
+    for path in "${worktree_paths[@]}"; do
+        if [[ $path == *$'\t'* || $path == *$'\n'* ]]; then
+            die 1 "worktree paths containing tabs or newlines are unsupported with --plain"
+        fi
+    done
+}
+
+print_plain_report() {
+    local index
+
+    validate_plain_paths
+    printf 'worktree\tbranch\tissue\tjira_status\tclassification\tsafety\n'
+    for index in "${!worktree_paths[@]}"; do
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "${worktree_paths[index]}" \
+            "${report_branches[index]}" \
+            "${report_issues[index]}" \
+            "${report_statuses[index]}" \
+            "${report_classifications[index]}" \
+            "${report_safeties[index]}"
+    done
+}
+
+print_human_report() {
+    local index
+    local issue
+    local jira_status
+
+    printf '%-36s  %-24s  %-12s  %-20s  %-14s  %s\n' \
+        WORKTREE BRANCH ISSUE 'JIRA STATUS' CLASSIFICATION SAFETY
+    for index in "${!worktree_paths[@]}"; do
+        issue=${report_issues[index]:--}
+        jira_status=${report_statuses[index]:--}
+        printf '%-36s  %-24s  %-12s  %-20s  %-14s  %s\n' \
+            "${worktree_paths[index]}" \
+            "${report_branches[index]}" \
+            "$issue" \
+            "$jira_status" \
+            "${report_classifications[index]}" \
+            "${report_safeties[index]}"
+    done
+}
+
+collect_prune_candidates() {
+    local index
+
+    for index in "${!worktree_paths[@]}"; do
+        if [ "${report_classifications[index]}" = candidate ] &&
+            [ "${report_safeties[index]}" = ok ]; then
+            prune_paths+=("${worktree_paths[index]}")
+            prune_heads+=("${worktree_heads[index]}")
+            prune_branches+=("${worktree_branches[index]}")
+            prune_issues+=("${report_issues[index]}")
+        fi
+    done
+}
+
+confirm_prune() {
+    local answer=
+
+    if [ "$assume_yes" -eq 1 ]; then
+        return 0
+    fi
+    if ! [ -t 0 ] &&
+        [ "${GIT_WORKTREE_JIRA_STATUS_TEST_TTY:-0}" != 1 ]; then
+        die 1 "--prune requires --yes when stdin is not interactive"
+    fi
+
+    printf 'Remove %d worktree(s)? [y/N] ' "${#prune_paths[@]}" >&2
+    if ! IFS= read -r answer; then
+        answer=
+    fi
+    case "${answer,,}" in
+        y | yes) return 0 ;;
+        *)
+            msg_info "Cancelled."
+            return 1
+            ;;
+    esac
+}
+
+recheck_git_candidate() {
+    local candidate=$1
+    local expected_path=${prune_paths[candidate]}
+    local expected_head=${prune_heads[candidate]}
+    local expected_branch=${prune_branches[candidate]}
+    local index
+    local found=-1
+    local canonical_path
+    local status
+
+    list_worktrees
+    for index in "${!worktree_paths[@]}"; do
+        if [ "${worktree_paths[index]}" = "$expected_path" ]; then
+            if [ "$found" -ne -1 ]; then
+                return 1
+            fi
+            found=$index
+        fi
+    done
+    if [ "$found" -lt 1 ] ||
+        [ "${worktree_heads[found]}" != "$expected_head" ] ||
+        [ "${worktree_branches[found]}" != "$expected_branch" ] ||
+        [ -z "${worktree_branches[found]}" ] ||
+        [ "${worktree_bare[found]}" -ne 0 ] ||
+        [ "${worktree_detached[found]}" -ne 0 ] ||
+        [ "${worktree_locked[found]}" -ne 0 ] ||
+        [ "${worktree_prunable[found]}" -ne 0 ]; then
+        return 1
+    fi
+    if ! canonical_path=$(cd "$expected_path" 2>/dev/null && pwd -P); then
+        return 1
+    fi
+    if [[ $current_directory == "$canonical_path" ||
+        $current_directory == "$canonical_path/"* ]]; then
+        return 1
+    fi
+    if ! status=$(git -C "$expected_path" status --porcelain 2>/dev/null) ||
+        [ -n "$status" ]; then
+        return 1
+    fi
+}
+
+prune_worktrees() {
+    local candidate
+    local key
+    local failures=0
+
+    collect_prune_candidates
+    if [ "${#prune_paths[@]}" -eq 0 ]; then
+        msg_info "No eligible worktrees to remove."
+        return 0
+    fi
+    for candidate in "${!prune_paths[@]}"; do
+        if [ "$dry_run" -eq 1 ]; then
+            msg_info "Would remove: ${prune_paths[candidate]}"
+        else
+            msg_info "Selected: ${prune_paths[candidate]}"
+        fi
+    done
+    if [ "$dry_run" -eq 1 ]; then
+        return 0
+    fi
+    if ! confirm_prune; then
+        return 0
+    fi
+
+    for candidate in "${!prune_paths[@]}"; do
+        key=${prune_issues[candidate]}
+        if ! fetch_jira_entry "$key" ||
+            [ "${fetched_jira_entry##*|}" != "done" ]; then
+            msg_info "Recheck failed: ${prune_paths[candidate]}"
+            failures=1
+            continue
+        fi
+        if ! recheck_git_candidate "$candidate"; then
+            msg_info "Recheck failed: ${prune_paths[candidate]}"
+            failures=1
+            continue
+        fi
+        if ! run git worktree remove "${prune_paths[candidate]}"; then
+            msg_info "Removal failed: ${prune_paths[candidate]}"
+            failures=1
+            continue
+        fi
+        msg_info "Removed: ${prune_paths[candidate]}"
+    done
+    if [ "$failures" -ne 0 ]; then
+        return 5
+    fi
+}
+
+main() {
+    process_arguments "$@"
+    require_cmds git jira jq
+    require_non_bare_worktree
+    current_directory=$(pwd -P)
+    list_worktrees
+    build_report
+    fetch_jira_statuses
+    classify_report
+    if [ "$plain" -eq 1 ]; then
+        print_plain_report
+    else
+        print_human_report
+    fi
+    if [ "$do_prune" -eq 1 ]; then
+        prune_worktrees
+    fi
+}
+
+do_prune=0
+dry_run=0
+assume_yes=0
+plain=0
+verbosity=0
+current_directory=
+issue_key=
+classification=
+safety=
+fetched_jira_entry=
+declare -a worktree_paths=()
+declare -a worktree_heads=()
+declare -a worktree_branches=()
+declare -a worktree_bare=()
+declare -a worktree_detached=()
+declare -a worktree_locked=()
+declare -a worktree_prunable=()
+declare -a report_branches=()
+declare -a report_issues=()
+declare -a report_statuses=()
+declare -a report_classifications=()
+declare -a report_safeties=()
+declare -A jira_statuses=()
+declare -a prune_paths=()
+declare -a prune_heads=()
+declare -a prune_branches=()
+declare -a prune_issues=()
+
+main "$@"

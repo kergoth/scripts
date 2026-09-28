@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Usage: git-worktree-jira-dirty
+#
+# Show dirty worktrees whose linked Jira issue is done (resolved/closed/etc),
+# i.e. cleanup candidates blocked only by uncommitted changes.
+#
+# Options:
+#     -h          Show this help message
+
+set -euo pipefail
+
+scriptdir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+scriptname=${BASH_SOURCE[0]##*/}
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+main() {
+    if [ "${1:-}" = -h ] || [ "${1:-}" = --help ]; then
+        show_help
+        exit 0
+    fi
+
+    local worktree
+    local branch
+    local issue
+    local jira_status
+    local classification
+    local safety
+    local found=0
+
+    while IFS=$'\t' read -r worktree branch issue jira_status classification safety; do
+        if [ "$classification" != candidate ] || [ "$safety" != dirty ]; then
+            continue
+        fi
+        found=1
+        printf '%s  %s  %s  %s\n' "$worktree" "$branch" "$issue" "$jira_status"
+        git -C "$worktree" status --short | sed 's/^/    /'
+    done < <("$scriptdir/git-worktree-jira-status" --plain | tail -n +2)
+
+    if [ "$found" -eq 0 ]; then
+        printf 'No dirty done-issue worktrees.\n' >&2
+    fi
+}
+
+main "$@"
