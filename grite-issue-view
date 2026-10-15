@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+format() {
+    if [ -t 1 ]; then
+        if command -v glow &>/dev/null; then
+            glow -
+        elif command -v bat &>/dev/null; then
+            bat -l Markdown
+        else
+            cat
+        fi
+    else
+        cat
+    fi
+}
+
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT INT TERM
+
+if grite issue show "$@" --json >"$tmpfile"; then
+    if jq . "$tmpfile" &>/dev/null; then
+        grite-issue-markdown <"$tmpfile" \
+            | format
+    else
+        cat "$tmpfile"
+    fi
+else
+    ret=$?
+    echo >&2 "Error running 'grite issue show $*'"
+    cat "$tmpfile"
+    exit "$ret"
+fi

@@ -119,6 +119,12 @@
 - **cdxp** [bash, -h]: Wrapper for `codex exec --full-auto` with stdin/markdown formatting.
 - **clp** [bash, -h]: Wrapper for `claude -p` with stdin/markdown formatting.
 
+## Grite
+
+- **grite-issue-markdown** [python (uv), -h/--help]: Render issue-show JSON from stdin as Markdown with the current description and newest-first comments.
+- **grite-issue-view** [bash, -h/--help]: Show an issue as Markdown; use Glow or bat on a terminal when available, otherwise output plain Markdown. Forward arguments to `grite issue show`.
+- **grite-issues** [bash, passthru]: List open Grite issues by default; forward arguments to `grite issue list`.
+
 ## Jira (`jira-*`)
 
 - **jira-to-notes** [bash, none]: Format jira-cli view output as markdown notes.

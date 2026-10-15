@@ -1,0 +1,163 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Render one Grite issue-show JSON response as Markdown."""
+
+import argparse
+from datetime import datetime, timedelta, timezone
+import json
+import os
+import re
+import sys
+
+
+IGNORED_EVENTS = {
+    "LabelAdded", "LabelRemoved", "StateChanged", "AssigneeAdded",
+    "AssigneeRemoved", "LinkAdded", "AttachmentAdded", "DependencyAdded",
+    "DependencyRemoved", "ContextUpdated", "ProjectContextUpdated",
+}
+
+
+def text(value, field):
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    return value
+
+
+def identifier(value, length, field):
+    value = text(value, field)
+    if not re.fullmatch(rf"[0-9a-fA-F]{{{length}}}", value):
+        raise ValueError(f"{field} must be a {length}-character hexadecimal ID")
+    return value.lower()
+
+
+def timestamp(value):
+    if type(value) is not int or value < 0:
+        raise ValueError("timestamps must be nonnegative integer milliseconds")
+    try:
+        date = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=value)
+    except OverflowError:
+        raise ValueError("timestamp is outside the supported date range") from None
+    return date.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def inline(value):
+    value = " ".join(value.split())
+    return re.sub(r"([\\`*_{}\[\]<>()#!|~&])", r"\\\1", value)
+
+
+def render(document):
+    if not isinstance(document, dict):
+        raise ValueError("expected an issue-show JSON object")
+    if "ok" in document:
+        if document["ok"] is not True:
+            raise ValueError("Grite returned an unsuccessful response")
+        if document.get("schema_version") != 1:
+            raise ValueError("unsupported Grite response schema version")
+        document = document.get("data")
+    if not isinstance(document, dict):
+        raise ValueError("expected issue-show data")
+    summary = document.get("issue")
+    events = document.get("events")
+    if not isinstance(summary, dict) or not isinstance(events, list):
+        raise ValueError("expected 'issue' object and 'events' array from grite issue show")
+
+    issue_id = identifier(summary.get("issue_id"), 32, "issue.issue_id")
+    title = inline(text(summary.get("title"), "issue.title"))
+    state = inline(text(summary.get("state"), "issue.state"))
+    created = timestamp(summary.get("created_ts"))
+    updated = timestamp(summary.get("updated_ts"))
+    metadata = []
+    for field in ("labels", "assignees"):
+        values = summary.get(field)
+        if not isinstance(values, list):
+            raise ValueError(f"issue.{field} must be an array")
+        if values:
+            rendered = ", ".join(inline(text(value, f"issue.{field}")) for value in values)
+            metadata.append(f"**{field.title()}:** {rendered}")
+
+    body_versions = []
+    comments = []
+    unknown = set()
+    creation_count = 0
+    seen = set()
+    for event in events:
+        if not isinstance(event, dict):
+            raise ValueError("each event must be an object")
+        if identifier(event.get("issue_id"), 32, "event.issue_id") != issue_id:
+            raise ValueError("event belongs to a different issue")
+        event_id = identifier(event.get("event_id"), 64, "event.event_id")
+        if event_id in seen:
+            raise ValueError("duplicate event ID")
+        seen.add(event_id)
+        actor = identifier(event.get("actor"), 32, "event.actor")
+        ts = event.get("ts_unix_ms")
+        date = timestamp(ts)
+        version = (ts, actor, event_id)
+        kind = event.get("kind")
+        if not isinstance(kind, dict) or len(kind) != 1:
+            raise ValueError("event.kind must contain exactly one event type")
+        name, payload = next(iter(kind.items()))
+        if not isinstance(payload, dict):
+            raise ValueError(f"{name} payload must be an object")
+        if name == "IssueCreated":
+            creation_count += 1
+            body_versions.append((version, text(payload.get("body"), f"{name}.body")))
+        elif name == "IssueUpdated":
+            if payload.get("body") is not None:
+                body_versions.append((version, text(payload["body"], f"{name}.body")))
+        elif name == "CommentAdded":
+            comments.append((version, date, text(payload.get("body"), f"{name}.body")))
+        elif name not in IGNORED_EVENTS:
+            unknown.add(name)
+    if creation_count != 1:
+        raise ValueError("expected exactly one IssueCreated event; input may be incomplete")
+
+    body = max(body_versions, key=lambda entry: entry[0])[1]
+    blocks = [
+        f"# {title}",
+        f"**ID:** `{issue_id}`  \n**State:** {state}",
+        *metadata,
+        f"**Created:** {created}  \n**Updated:** {updated}",
+        "## Description",
+        body,
+        "## Discussion",
+    ]
+    for version, date, comment_body in sorted(comments, key=lambda entry: entry[0], reverse=True):
+        blocks.extend([f"### {version[1][:8]} · {date}", comment_body])
+    if not comments:
+        blocks.append("No comments.")
+    return "\n\n".join(blocks) + "\n", unknown
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Example: grite issue show ID --json | grite-issue-markdown | glow -",
+    )
+    parser.parse_args()
+    if sys.stdin.isatty():
+        parser.print_help(sys.stderr)
+        return 2
+    try:
+        markdown, unknown = render(json.load(sys.stdin))
+    except (ValueError, OSError, RecursionError) as error:
+        print(f"{parser.prog}: error: {error}", file=sys.stderr)
+        return 1
+    for name in sorted(unknown):
+        print(
+            f"{parser.prog}: warning: unknown event type {name!r}; display may be incomplete",
+            file=sys.stderr,
+        )
+    try:
+        sys.stdout.write(markdown)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
