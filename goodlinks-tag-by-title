@@ -8,6 +8,7 @@ dry_run=
 case "${1:-}" in
     -n|--dry-run)
         dry_run=1
+        shift
         ;;
     -h|--help)
         echo >&2 "${0##*/} [-n] [--dry-run] [-h] [--help] TITLE_REGEX TAG"
