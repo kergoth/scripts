@@ -143,22 +143,6 @@ def test_resolve_trailing_slash_entry_records_connection_error(script, monkeypat
     }
 
 
-def test_trailing_slash_highlight_lookup_failure_is_reported(script, monkeypatch):
-    groups = [[{"id": "1", "url": "https://example.com/article"}]]
-    monkeypatch.setattr(
-        script,
-        "fetch_trailing_slash_highlight_info",
-        lambda link_id: {"count": None, "error": "goodlinksctl exited 4"},
-    )
-
-    script.annotate_trailing_slash_highlights(groups, workers=1, verbosity=-1)
-
-    assert groups[0][0]["highlights"] == {
-        "count": None,
-        "error": "goodlinksctl exited 4",
-    }
-
-
 def make_link(link_id, url, read_at=None):
     return {
         "id": link_id,
@@ -210,13 +194,7 @@ def test_trailing_slash_json_reports_directed_redirect_and_metadata(
                     "error": None,
                 }
 
-    def annotate(groups, workers, verbosity):
-        for group in groups:
-            for entry in group:
-                entry["highlights"] = {"count": 2, "error": None}
-
     monkeypatch.setattr(script, "resolve_trailing_slash_groups", resolve)
-    monkeypatch.setattr(script, "annotate_trailing_slash_highlights", annotate)
     monkeypatch.setattr(
         sys, "argv", ["goodlinks-find-dupes", "--trailing-slash", "--json"]
     )
@@ -236,7 +214,7 @@ def test_trailing_slash_json_reports_directed_redirect_and_metadata(
             "final_url": "https://example.com/article",
         }
     ]
-    assert output["entries"][0]["highlights"] == {"count": 2, "error": None}
+    assert output["entries"][0]["highlighted"] is False
     assert output["entries"][1]["read_at"] == "2025-01-01T00:00:00Z"
 
 
@@ -263,9 +241,6 @@ def test_trailing_slash_json_keeps_groups_without_redirects(
                 }
 
     monkeypatch.setattr(script, "resolve_trailing_slash_groups", resolve)
-    monkeypatch.setattr(
-        script, "annotate_trailing_slash_highlights", lambda *args: None
-    )
     monkeypatch.setattr(
         sys, "argv", ["goodlinks-find-dupes", "--trailing-slash", "--json"]
     )

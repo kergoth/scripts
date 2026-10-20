@@ -2,12 +2,13 @@
 """Check GoodLinks source URLs for dead or error responses.
 
 Read-only: reports link id, url, resolved url, and result. Does not tag or
-modify GoodLinks. Pipe --json output into goodlinksctl to act on results,
-e.g. tag everything that came back dead:
+modify GoodLinks. Pipe --json output into `goodlinks link delete` or
+`goodlinks link edit --add-tag` to act on results, e.g. tag everything that
+came back dead:
 
     goodlinks-check-links --json \\
         | jq -r 'select(.ok == false) | .id' \\
-        | goodlinksctl links update --stdin --add-tag dead-link
+        | xargs goodlinks link edit --add-tag dead-link
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 def fetch_links(verbosity: int) -> list[dict[str, Any]]:
     if verbosity >= 0:
         print("fetching links from goodlinks...", file=sys.stderr, flush=True)
-    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    cmd = ["goodlinks-links-json"]
     proc = run(cmd)
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr or proc.stdout)

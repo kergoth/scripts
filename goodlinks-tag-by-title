@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+PATH="${GOODLINKS_CLI_DIR:-/Applications/GoodLinks.app/Contents/MacOS/CLI}${PATH:+:$PATH}"
+
 dry_run=
 case "${1:-}" in
     -n|--dry-run)
@@ -16,11 +18,11 @@ esac
 title_pattern="$1"
 tag="$2"
 
-goodlinksctl links list --json --all-pages \
+goodlinks-links-json \
   | jq -r --arg pattern "$title_pattern" --arg tag "$tag" '
       .data[]
       | select((.title // "") | test($pattern; "i"))
       | select(((.tags // []) | index($tag)) == null)
       | .id
     ' \
-  | xargs -n 10 -t ${dry_run:+echo }goodlinksctl links update --add-tag "$tag"
+  | xargs -n 1 -t ${dry_run:+echo }goodlinks link edit --add-tag "$tag"

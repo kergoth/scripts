@@ -7,13 +7,14 @@
 
 Rules load from a TOML config file (see --config for the default path;
 run with no config present to print the expected format). Dry-run by
-default; pass --apply to actually write tags via goodlinksctl.
+default; pass --apply to actually write tags via the GoodLinks CLI.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -26,6 +27,14 @@ from urllib.parse import urlparse
 from platformdirs import user_config_path
 
 CONFIG_PATH = user_config_path("goodlinks") / "autotag.toml"
+
+GOODLINKS_CLI_DIR = os.environ.get(
+    "GOODLINKS_CLI_DIR", "/Applications/GoodLinks.app/Contents/MacOS/CLI"
+)
+
+# The GoodLinks app ships its CLI inside the app bundle, off PATH; set
+# GOODLINKS_CLI_DIR to point at a stub or a relocated copy.
+os.environ["PATH"] = f"{GOODLINKS_CLI_DIR}:{os.environ.get('PATH', '')}"
 
 SAMPLE_CONFIG = """\
 # tags in this list are mutually exclusive per link: a rule won't add
@@ -140,7 +149,7 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def fetch_links() -> list[dict[str, Any]]:
-    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    cmd = ["goodlinks-links-json"]
     proc = run(cmd)
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr or proc.stdout)
@@ -177,19 +186,19 @@ def tags_to_add(link: dict[str, Any], rules: list[Rule], exclusive_tags: set[str
 
 
 def apply_updates(updates: list[dict[str, Any]]) -> int:
-    payload = "\n".join(json.dumps(u) for u in updates)
-    proc = subprocess.run(
-        ["goodlinksctl", "--json", "links", "update", "--stdin-jsonl"],
-        input=payload,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode not in (0, 7):
-        sys.stderr.write(proc.stderr or proc.stdout)
-        return proc.returncode
-    print(proc.stdout)
-    return 0 if proc.returncode == 0 else 1
+    failures = 0
+    for update in updates:
+        args = ["goodlinks", "link", "edit", update["id"]]
+        for tag in update["addedTags"]:
+            args += ["--add-tag", tag]
+        proc = subprocess.run(args, text=True, capture_output=True, check=False)
+        if proc.returncode != 0:
+            failures += 1
+            sys.stderr.write(f"{update['id']}: {proc.stderr or proc.stdout}")
+    if failures:
+        sys.stderr.write(f"{failures} of {len(updates)} links could not be tagged\n")
+        return 1
+    return 0
 
 
 def main() -> int:

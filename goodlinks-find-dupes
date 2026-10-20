@@ -28,13 +28,14 @@ group and remove the ones you don't want to keep, e.g.:
 
     goodlinks-find-dupes --json \\
         | jq -r '.entries[1:][].id' \\
-        | xargs goodlinksctl links delete --dry-run
+        | xargs goodlinks link delete
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -45,10 +46,17 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
+GOODLINKS_CLI_DIR = os.environ.get(
+    "GOODLINKS_CLI_DIR", "/Applications/GoodLinks.app/Contents/MacOS/CLI"
+)
 DEFAULT_WORKERS = 8
 DEFAULT_TIMEOUT = 15.0
 USER_AGENT = "goodlinks-find-dupes/1.0"
 MAX_CANONICAL_BODY_BYTES = 2 * 1024 * 1024
+
+# The GoodLinks app ships its CLI inside the app bundle, off PATH; set
+# GOODLINKS_CLI_DIR to point at a stub or a relocated copy.
+os.environ["PATH"] = f"{GOODLINKS_CLI_DIR}:{os.environ.get('PATH', '')}"
 
 
 class CanonicalLinkParser(HTMLParser):
@@ -84,7 +92,7 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 def fetch_links(verbosity: int) -> list[dict[str, Any]]:
     if verbosity >= 0:
         print("fetching links from goodlinks...", file=sys.stderr, flush=True)
-    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    cmd = ["goodlinks-links-json"]
     proc = run(cmd)
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr or proc.stdout)
@@ -242,75 +250,6 @@ def resolve_trailing_slash_groups(
         print(file=sys.stderr)
 
 
-def fetch_trailing_slash_highlight_info(link_id: str) -> dict[str, Any]:
-    cmd = [
-        "goodlinksctl",
-        "--json",
-        "highlights",
-        "list",
-        "--link-id",
-        link_id,
-        "--all-pages",
-    ]
-    proc = run(cmd)
-    if proc.returncode != 0:
-        return {"count": None, "error": f"goodlinksctl exited {proc.returncode}"}
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return {"count": None, "error": "invalid GoodLinksCTL JSON"}
-    return {"count": len(payload.get("data", [])), "error": None}
-
-
-def annotate_trailing_slash_highlights(
-    groups: list[list[dict[str, Any]]], workers: int, verbosity: int
-) -> None:
-    entries = [entry for group in groups for entry in group if entry["id"]]
-    if not entries:
-        return
-    if verbosity >= 0:
-        print(f"checking highlights for {len(entries)} trailing-slash candidates...", file=sys.stderr, flush=True)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        infos = list(pool.map(fetch_trailing_slash_highlight_info, [entry["id"] for entry in entries]))
-    for entry, info in zip(entries, infos, strict=True):
-        entry["highlights"] = info
-
-
-def fetch_highlight_count(link_id: str) -> int:
-    cmd = [
-        "goodlinksctl",
-        "--json",
-        "highlights",
-        "list",
-        "--link-id",
-        link_id,
-        "--all-pages",
-    ]
-    proc = run(cmd)
-    if proc.returncode != 0:
-        return 0
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return 0
-    return len(payload.get("data", []))
-
-
-def annotate_highlight_counts(
-    groups: list[list[dict[str, Any]]], workers: int, verbosity: int
-) -> None:
-    ids = [entry["id"] for group in groups for entry in group if entry["id"]]
-    if not ids:
-        return
-    if verbosity >= 0:
-        print(f"checking highlights for {len(ids)} duplicate links...", file=sys.stderr, flush=True)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        counts = dict(zip(ids, pool.map(fetch_highlight_count, ids)))
-    for group in groups:
-        for entry in group:
-            entry["highlight_count"] = counts.get(entry["id"], 0)
-
-
 def group_by_key(
     entries: list[dict[str, Any]], key: str
 ) -> list[list[dict[str, Any]]]:
@@ -443,7 +382,6 @@ def main() -> int:
     if args.trailing_slash:
         groups = build_trailing_slash_groups(entries)
         resolve_trailing_slash_groups(groups, args.workers, args.timeout, verbosity)
-        annotate_trailing_slash_highlights(groups, args.workers, verbosity)
         group_key = "normalized_url"
     elif follow_redirects:
         entries = resolve_entries(
@@ -452,12 +390,10 @@ def main() -> int:
         group_key = "canonical_url" if args.canonical else "resolved_url"
         groups = group_by_key(entries, group_key)
         groups.sort(key=lambda grp: grp[0][group_key])
-        annotate_highlight_counts(groups, args.workers, verbosity)
     else:
         group_key = "url"
         groups = group_by_key(entries, group_key)
         groups.sort(key=lambda grp: grp[0][group_key])
-        annotate_highlight_counts(groups, args.workers, verbosity)
 
     for group in groups:
         if args.json:
@@ -469,13 +405,10 @@ def main() -> int:
             for entry in group:
                 if args.trailing_slash:
                     redirect = entry["redirect"]
-                    highlights = entry.get("highlights", {"count": None, "error": "not checked"})
                     meta = (
                         f"tags={','.join(entry['tags']) or '-'}"
                         f" starred={entry['starred']}"
                         f" highlighted={entry['highlighted']}"
-                        f" highlights={highlights['count'] if highlights['count'] is not None else '?'}"
-                        f" highlight_error={highlights['error'] or '-'}"
                         f" read={'yes' if entry['read_at'] else 'no'}"
                         f" words={entry['word_count'] if entry['word_count'] is not None else '-'}"
                         f" added={entry['added_at'] or '-'}"
@@ -493,7 +426,7 @@ def main() -> int:
                     meta = (
                         f"tags={','.join(entry['tags']) or '-'}"
                         f" starred={entry['starred']}"
-                        f" highlights={entry.get('highlight_count', 0)}"
+                        f" highlighted={entry['highlighted']}"
                         f" read={'yes' if entry['read_at'] else 'no'}"
                         f" words={entry['word_count'] if entry['word_count'] is not None else '-'}"
                         f" added={entry['added_at'] or '-'}"

@@ -4,18 +4,27 @@
 Some tags (e.g. reference) mark permanent lookups rather than something
 to act on later, so unread/read status carries no meaning for them.
 
-Dry-run by default; pass --apply to actually write read status via goodlinksctl.
+Dry-run by default; pass --apply to actually write read status via the
+GoodLinks CLI.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from typing import Any
 
+GOODLINKS_CLI_DIR = os.environ.get(
+    "GOODLINKS_CLI_DIR", "/Applications/GoodLinks.app/Contents/MacOS/CLI"
+)
 INVARIANT_READ_TAGS = {"reference"}
+
+# The GoodLinks app ships its CLI inside the app bundle, off PATH; set
+# GOODLINKS_CLI_DIR to point at a stub or a relocated copy.
+os.environ["PATH"] = f"{GOODLINKS_CLI_DIR}:{os.environ.get('PATH', '')}"
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -23,7 +32,7 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def fetch_links() -> list[dict[str, Any]]:
-    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    cmd = ["goodlinks-links-json"]
     proc = run(cmd)
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr or proc.stdout)
@@ -38,16 +47,20 @@ def needs_read(link: dict[str, Any]) -> bool:
 
 
 def apply_updates(ids: list[str]) -> int:
-    proc = subprocess.run(
-        ["goodlinksctl", "--json", "links", "update", "--read", *ids],
-        text=True,
-        capture_output=True,
-    )
-    if proc.returncode not in (0, 7):
-        sys.stderr.write(proc.stderr or proc.stdout)
-        return proc.returncode
-    print(proc.stdout)
-    return 0 if proc.returncode == 0 else 1
+    failures = 0
+    for link_id in ids:
+        proc = subprocess.run(
+            ["goodlinks", "link", "edit", link_id, "--read"],
+            text=True,
+            capture_output=True,
+        )
+        if proc.returncode != 0:
+            failures += 1
+            sys.stderr.write(f"{link_id}: {proc.stderr or proc.stdout}")
+    if failures:
+        sys.stderr.write(f"{failures} of {len(ids)} links could not be marked read\n")
+        return 1
+    return 0
 
 
 def main() -> int:

@@ -15,7 +15,7 @@ because the source renamed the post/slug, in which case the old title no
 longer matches the new page. Left unset, GoodLinks fetches the new page's
 own title at save time, same as a normal save. Pass --title to force one.
 
-Caveat: `links add` upserts on URL match, including trashed entries. If
+Caveat: `link add` upserts on URL match, including trashed entries. If
 new_url was already saved before (e.g. a prior run you deleted and are
 retrying), the omitted title won't be freshly fetched -- it stays whatever
 that existing/trashed record already had. Pass --title explicitly to be
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from typing import Any
@@ -39,26 +40,23 @@ STATUS_ORPHANED_DEFAULT = "status/highlights-orphaned"
 STATUS_ELSEWHERE_DEFAULT = "status/highlights-elsewhere"
 REMOVE_TAG_DEFAULT = "to-remove"
 SUMMARY_MAX = 400
+GOODLINKS_CLI_DIR = os.environ.get(
+    "GOODLINKS_CLI_DIR", "/Applications/GoodLinks.app/Contents/MacOS/CLI"
+)
+
+# The GoodLinks app ships its CLI inside the app bundle, off PATH; set
+# GOODLINKS_CLI_DIR to point at a stub or a relocated copy.
+os.environ["PATH"] = f"{GOODLINKS_CLI_DIR}:{os.environ.get('PATH', '')}"
 
 
-def run_ctl(args: list[str], json_mode: bool) -> dict[str, Any]:
+def run_cli(args: list[str]) -> dict[str, Any]:
     proc = subprocess.run(
-        ["goodlinksctl", "--json", *args], text=True, capture_output=True, check=False
+        ["goodlinks", *args], text=True, capture_output=True, check=False
     )
     if proc.returncode != 0:
-        if json_mode:
-            sys.stderr.write(proc.stderr or proc.stdout)
-        else:
-            sys.stderr.write(proc.stderr or proc.stdout)
+        sys.stderr.write(proc.stderr or proc.stdout)
         raise SystemExit(proc.returncode)
     return json.loads(proc.stdout)
-
-
-def highlight_count(link_id: str, json_mode: bool) -> int:
-    payload = run_ctl(
-        ["highlights", "list", "--link-id", link_id, "--all-pages"], json_mode
-    )
-    return len(payload.get("data", []))
 
 
 def with_breadcrumb(summary: str | None, marker: str) -> str:
@@ -71,7 +69,7 @@ def with_breadcrumb(summary: str | None, marker: str) -> str:
     return text[:SUMMARY_MAX]
 
 
-def build_plan(args: argparse.Namespace, old: dict[str, Any], highlights: int) -> dict[str, Any]:
+def build_plan(args: argparse.Namespace, old: dict[str, Any], has_highlights: bool) -> dict[str, Any]:
     own_tags = {args.status_tag_orphaned, args.status_tag_elsewhere, args.remove_tag}
     old_tags = (
         []
@@ -80,7 +78,7 @@ def build_plan(args: argparse.Namespace, old: dict[str, Any], highlights: int) -
     )
     new_tags = old_tags + list(args.tag)
 
-    if highlights > 0:
+    if has_highlights:
         old_tag = args.status_tag_orphaned
         new_tags.append(args.status_tag_elsewhere)
     elif not args.no_remove_tag:
@@ -99,7 +97,7 @@ def build_plan(args: argparse.Namespace, old: dict[str, Any], highlights: int) -
         "old_id": args.old_id,
         "new_id": None,
         "new_url": args.new_url,
-        "highlight_count": highlights,
+        "has_highlights": has_highlights,
         "old_tag_added": old_tag,
         "new_tags": sorted(set(new_tags)),
         "new_title": args.title,
@@ -111,34 +109,31 @@ def build_plan(args: argparse.Namespace, old: dict[str, Any], highlights: int) -
     }
 
 
-def apply_plan(plan: dict[str, Any], json_mode: bool) -> None:
-    add_args = [
-        "links",
-        "add",
-        plan["new_url"],
-        "--summary",
-        plan["new_summary"],
-        "--added-at",
-        plan["added_at"] or "",
-    ]
+def apply_plan(plan: dict[str, Any]) -> None:
+    add_args = ["link", "add", plan["new_url"], "--summary", plan["new_summary"]]
+    if plan["added_at"]:
+        add_args += ["--added-at", plan["added_at"]]
     if plan["new_title"]:
         add_args += ["--title", plan["new_title"]]
     for tag in plan["new_tags"]:
         add_args += ["--tag", tag]
-    add_args.append("--read" if plan["read"] else "--unread")
-    add_args.append("--starred" if plan["starred"] else "--unstarred")
+    if plan["read"]:
+        add_args.append("--read")
+    if plan["starred"]:
+        add_args.append("--starred")
 
-    new_link = run_ctl(add_args, json_mode)
+    run_cli(add_args)
+    new_link = run_cli(["link", "url", plan["new_url"]])
     plan["new_id"] = new_link["id"]
     if not plan["new_title"]:
         plan["new_title"] = new_link.get("title")
 
     old_summary = plan["old_summary"].replace("<pending>", plan["new_id"])
     plan["old_summary"] = old_summary
-    update_args = ["links", "update", plan["old_id"], "--summary", old_summary]
+    update_args = ["link", "edit", plan["old_id"], "--summary", old_summary]
     if plan["old_tag_added"]:
         update_args += ["--add-tag", plan["old_tag_added"]]
-    run_ctl(update_args, json_mode)
+    run_cli(update_args)
 
 
 def print_report(plan: dict[str, Any], json_mode: bool, quiet: bool) -> None:
@@ -159,7 +154,7 @@ def print_report(plan: dict[str, Any], json_mode: bool, quiet: bool) -> None:
             print(f"update\t{plan['old_id']}\tsummary+=[migrated-to: {new_id}]")
     print(
         f"summary\tmode={plan['mode']}\told_id={plan['old_id']}\tnew_id={new_id}\t"
-        f"highlights={plan['highlight_count']}"
+        f"highlights={str(plan['has_highlights']).lower()}"
     )
 
 
@@ -208,12 +203,11 @@ def main() -> int:
         sys.stderr.write(f"error: new_url must be http(s): {args.new_url!r}\n")
         return 2
 
-    old = run_ctl(["links", "get", args.old_id], args.json)
-    highlights = highlight_count(args.old_id, args.json)
-    plan = build_plan(args, old, highlights)
+    old = run_cli(["link", "id", args.old_id])
+    plan = build_plan(args, old, bool(old.get("highlighted")))
 
     if args.apply:
-        apply_plan(plan, args.json)
+        apply_plan(plan)
 
     print_report(plan, args.json, args.quiet)
     return 0

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#
+# goodlinks-links-json - emit the whole GoodLinks library as one JSON object.
+#
+# Usage: goodlinks-links-json [-v] [-h]
+#
+# The official GoodLinks CLI paginates: `goodlinks link list all` returns at
+# most 1000 links per call and reports whether more remain. This pages through
+# the entire library and writes a single {"data": [...], "hasMore": false}
+# object, which is the envelope shape the goodlinks-* scripts and pipelines
+# consume.
+#
+# Options:
+#     -v          Increase verbosity, can be specified multiple times
+#     -h          Show this help message
+
+set -euo pipefail
+
+PATH="${GOODLINKS_CLI_DIR:-/Applications/GoodLinks.app/Contents/MacOS/CLI}${PATH:+:$PATH}"
+
+page_size=1000
+
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${BASH_SOURCE[0]##*/}.XXXXXX")
+trap 'rm -rf "$tmpdir"' EXIT
+
+show_help() {
+    sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
+}
+
+msg() {
+    fmt="$1"
+    if [ $# -gt 1 ]; then
+        shift
+    fi
+    # shellcheck disable=SC2059
+    printf -- "$fmt\n" "$@" >&2
+}
+
+msg_verbose() {
+    if [ "${verbosity:-0}" -gt 0 ]; then
+        msg "$@"
+    fi
+}
+
+die() {
+    msg "%s" "$*"
+    exit 1
+}
+
+process_arguments() {
+    verbosity=0
+    while getopts ':vh' opt; do
+        case "$opt" in
+        v)
+            verbosity=$((verbosity + 1))
+            ;;
+        h)
+            show_help
+            exit 0
+            ;;
+        \?)
+            echo "Unknown option: -$OPTARG" >&2
+            show_help >&2
+            exit 1
+            ;;
+        esac
+    done
+}
+
+main() {
+    process_arguments "$@"
+
+    if ! command -v goodlinks >/dev/null 2>&1; then
+        die "goodlinks CLI not found: expected /Applications/GoodLinks.app/Contents/MacOS/CLI/goodlinks"
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        die "jq not found in PATH"
+    fi
+
+    local -a pages=()
+    local offset=0
+    local count has_more page
+
+    while :; do
+        page="$tmpdir/page.$offset.json"
+        msg_verbose "fetching links at offset %d" "$offset"
+        if ! goodlinks link list all --limit "$page_size" --offset "$offset" >"$page"; then
+            die "goodlinks link list failed at offset $offset"
+        fi
+        if ! count=$(jq '.data | length' "$page"); then
+            die "could not parse goodlinks output at offset $offset"
+        fi
+        pages+=("$page")
+        if [ "$count" -eq 0 ]; then
+            break
+        fi
+        has_more=$(jq -r '.hasMore' "$page")
+        if [ "$has_more" = "false" ]; then
+            break
+        fi
+        offset=$((offset + count))
+    done
+
+    jq -s '{data: [.[].data[]], hasMore: false}' "${pages[@]}"
+}
+
+main "$@"

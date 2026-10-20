@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Usage: goodlinks-by-date [options]
 #
-# Filter goodlinksctl JSON by date window. Reads JSON from stdin (either
-# the goodlinksctl {data: [...]} envelope or a bare array) and writes a
+# Filter GoodLinks JSON by date window. Reads JSON from stdin (either
+# the goodlinks-links-json {data: [...]} envelope or a bare array) and writes a
 # filtered JSON array to stdout.
 #
 # Options:
@@ -69,7 +69,7 @@ main() {
     command -v jq >/dev/null 2>&1 || die "jq not found in PATH"
 
     if [ -t 0 ]; then
-        die "no input: pipe goodlinksctl JSON to stdin"
+        die "no input: pipe goodlinks-links-json output to stdin"
     fi
 
     input_json=$(cat)

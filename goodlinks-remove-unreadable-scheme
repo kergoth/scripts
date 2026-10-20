@@ -6,19 +6,27 @@ tel:, sms:, facetime:, itms-apps:, market:, ...) hands off to another app
 instead of showing content, so these are junk saves rather than readable
 links.
 
-Dry-run by default; pass --apply to actually delete via goodlinksctl.
+Dry-run by default; pass --apply to actually delete via the GoodLinks CLI.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from typing import Any
 from urllib.parse import urlsplit
 
 READABLE_SCHEMES = {"http", "https"}
+GOODLINKS_CLI_DIR = os.environ.get(
+    "GOODLINKS_CLI_DIR", "/Applications/GoodLinks.app/Contents/MacOS/CLI"
+)
+
+# The GoodLinks app ships its CLI inside the app bundle, off PATH; set
+# GOODLINKS_CLI_DIR to point at a stub or a relocated copy.
+os.environ["PATH"] = f"{GOODLINKS_CLI_DIR}:{os.environ.get('PATH', '')}"
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -26,7 +34,7 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def fetch_links() -> list[dict[str, Any]]:
-    cmd = ["goodlinksctl", "--json", "links", "list", "--all-pages", "--limit", "250"]
+    cmd = ["goodlinks-links-json"]
     proc = run(cmd)
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr or proc.stdout)
@@ -44,30 +52,31 @@ def has_unreadable_scheme(link: dict[str, Any]) -> bool:
 
 
 def delete(ids: list[str]) -> int:
-    dry = subprocess.run(
-        ["goodlinksctl", "--json", "links", "delete", *ids, "--dry-run"],
-        text=True,
-        capture_output=True,
-    )
-    if dry.returncode not in (0, 7):
-        sys.stderr.write(dry.stderr or dry.stdout)
-        return dry.returncode
-    preflight = json.loads(dry.stdout)
-    if preflight.get("summary", {}).get("failed"):
-        sys.stderr.write(dry.stdout)
+    missing = [
+        link_id
+        for link_id in ids
+        if subprocess.run(
+            ["goodlinks", "link", "id", link_id],
+            text=True,
+            capture_output=True,
+            check=False,
+        ).returncode != 0
+    ]
+    if missing:
+        sys.stderr.write(f"preflight failed, missing {','.join(missing)}\n")
         print("preflight reported failures, aborting delete", file=sys.stderr)
         return 1
 
     proc = subprocess.run(
-        ["goodlinksctl", "--json", "links", "delete", *ids, "--yes"],
+        ["goodlinks", "link", "delete", *ids],
         text=True,
         capture_output=True,
     )
-    if proc.returncode not in (0, 7):
+    if proc.returncode != 0:
         sys.stderr.write(proc.stderr or proc.stdout)
         return proc.returncode
     print(proc.stdout)
-    return 0 if proc.returncode == 0 else 1
+    return 0
 
 
 def main() -> int:

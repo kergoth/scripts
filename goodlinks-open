@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 
-tmpfile=$(mktemp "${TMPDIR:-/tmp}/${0##*/}.XXXXXX")
+PATH="${GOODLINKS_CLI_DIR:-/Applications/GoodLinks.app/Contents/MacOS/CLI}${PATH:+:$PATH}"
+
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/${BASH_SOURCE[0]##*/}.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT INT TERM
 
 id="$1"
-if goodlinksctl links get --json "$id" >"$tmpfile"; then
-    url=$(jq -r .url "$tmpfile")
-    if [ -z "$url" ]; then
-        echo >&2 "Error retrieving url from id $id"
-        exit 1
-    fi
-else
-    url="$id"
-
-    if [ -z "$url" ]; then
-        echo >&2 "id/url must be non-empty"
-        exit 1
-    fi
+if [ -z "$id" ]; then
+    echo >&2 "id/url must be non-empty"
+    exit 1
 fi
 
-open "goodlinks://x-callback-url/open?url=$(urlencode "$url")"
+# A saved entry has its own deeplink; an unsaved URL falls back to the
+# x-callback open handler, which needs the URL percent-encoded.
+if goodlinks link id "$id" >"$tmpfile" 2>/dev/null || goodlinks link url "$id" >"$tmpfile" 2>/dev/null; then
+    deeplink=$(jq -r '.deeplink // empty' "$tmpfile")
+    if [ -z "$deeplink" ]; then
+        echo >&2 "Error retrieving deeplink from id $id"
+        exit 1
+    fi
+    open "$deeplink"
+    exit
+fi
+
+encoded=$(jq -rn --arg url "$id" '$url|@uri')
+open "goodlinks://x-callback-url/open?url=$encoded"

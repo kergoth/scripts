@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: goodlinks-to-epub [options] [TITLE]
 #
-# Generate an epub from goodlinksctl JSON read on stdin. Fetches full article
+# Generate an epub from goodlinks-links-json output read on stdin. Fetches full article
 # content for each item and compiles them with pandoc (via nix run).
 #
 # TITLE is a fragment prepended to the newest article date in the epub title
@@ -26,6 +26,8 @@
 #     -q          Decrease verbosity, can be specified multiple times
 #     -h          Show this help message
 set -euo pipefail
+
+PATH="${GOODLINKS_CLI_DIR:-/Applications/GoodLinks.app/Contents/MacOS/CLI}${PATH:+:$PATH}"
 
 show_help() {
     sed -n '/^# Usage:/,/^# *-h /p' "${BASH_SOURCE[0]}" | sed 's/^# *//'
@@ -144,14 +146,14 @@ add_epub_to_calibre() {
 main() {
     process_arguments "$@"
 
-    command -v goodlinksctl >/dev/null 2>&1 || die "goodlinksctl not found in PATH"
+    command -v goodlinks >/dev/null 2>&1 || die "goodlinks CLI not found: expected /Applications/GoodLinks.app/Contents/MacOS/CLI/goodlinks"
     command -v jq >/dev/null 2>&1 || die "jq not found in PATH"
     command -v nix >/dev/null 2>&1 || die "nix not found in PATH"
     if [ "$mark_read" = "1" ]; then
         command -v ebook-convert >/dev/null 2>&1 || die "ebook-convert (calibre) not found in PATH"
     fi
     if [ -t 0 ]; then
-        die "no input: pipe goodlinksctl JSON to stdin"
+        die "no input: pipe goodlinks-links-json output to stdin"
     fi
 
     # Read exclusive_tags from schema.toml to identify non-article saves.
@@ -217,7 +219,7 @@ print(json.dumps(cfg['exclusive_tags']))
         msg_verbose "  [%d/%d] %s" "$index" "$total" "$title"
 
         ret=0
-        content=$(goodlinksctl links content "$id" --format markdown 2>/dev/null) || ret=$?
+        content=$(goodlinks link content "$id" --format markdown 2>/dev/null) || ret=$?
         if [ "$ret" -ne 0 ] || [ -z "$content" ]; then
             msg "Skipping (content unavailable): %s" "$title"
             continue
@@ -261,14 +263,17 @@ print(json.dumps(cfg['exclusive_tags']))
             msg "warning: calibre validation failed — not marking articles as read"
         else
             msg "Marking %d articles as read..." "$count"
-            ret=0
-            printf '%s\n' "${fetched_ids[@]}" | goodlinksctl --json links update --stdin --read >/dev/null || ret=$?
-            if [ "$ret" -eq 0 ]; then
+            failed=0
+            for id in "${fetched_ids[@]}"; do
+                if ! goodlinks link edit "$id" --read >/dev/null 2>&1; then
+                    failed=$((failed + 1))
+                fi
+            done
+
+            if [ "$failed" -eq 0 ]; then
                 msg "Marked %d articles as read." "$count"
-            elif [ "$ret" -eq 7 ]; then
-                msg "warning: some articles could not be marked as read (partial failure)"
             else
-                msg "warning: failed to mark articles as read (exit %d)" "$ret"
+                msg "warning: %d of %d articles could not be marked as read" "$failed" "$count"
             fi
         fi
     fi

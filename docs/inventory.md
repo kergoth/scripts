@@ -377,21 +377,30 @@
 
 ## GoodLinks maintenance (`goodlinks-*`)
 
-- **goodlinks-articles** [bash, -h]: Filter goodlinksctl JSON to unread saves
+- **goodlinks-articles** [bash, -h]: Filter goodlinks-links-json output to unread saves
   that are plain articles.
-- **goodlinks-autotag** [python, argparse]: Auto-tag GoodLinks links by URL host, driven by a rule table. Dry-run by default; `--apply` writes tags via `goodlinksctl`.
-- **goodlinks-by-date** [bash, -h]: Filter goodlinksctl JSON by date window.
-- **goodlinks-check-links** [python, argparse]: Check GoodLinks source URLs for dead or error responses. Read-only; pipe `--json` failures into `goodlinksctl` to tag them.
+- **goodlinks-autotag** [python, argparse]: Auto-tag GoodLinks links by URL host, driven by a rule table. Dry-run by default; `--apply` writes tags via `goodlinks link edit`.
+- **goodlinks-by-date** [bash, -h]: Filter goodlinks-links-json output by date window.
+- **goodlinks-check-links** [python, argparse]: Check GoodLinks source URLs for dead or error responses. Read-only; pipe `--json` failures into `goodlinks link edit` to tag them.
+- **goodlinks-classify-dupes** [python, argparse]: Split goodlinks-find-dupes groups into merge-safety buckets (safe, root, review) for manual review. Read-only.
+- **goodlinks-dedupe** [python, argparse]: Resolve byte-identical duplicate groups from goodlinks-find-dupes: skip groups with highlights, keep the lowest ID, merge metadata in tier 2, delete the rest. Dry-run by default; `--apply` writes, **DESTRUCTIVE** on `--apply`.
 - **goodlinks-find-dupes** [python, argparse]: Find GoodLinks duplicate candidates by raw URL, `-r` redirect-resolved URL, `-c` canonical URL, or `--trailing-slash` normalization. The terminal-slash mode reports directed redirect evidence for manual review. Read-only.
+- **goodlinks-links-json** [bash, -h]: Page the whole GoodLinks library through the official CLI and emit one `{data, hasMore}` JSON object for the other goodlinks scripts and pipelines.
 - **goodlinks-maintain** [sh, -h]: Run all GoodLinks maintenance passes: autotag, mark read-invariant tags read, remove links with unreadable URL schemes.
 - **goodlinks-mark-invariant-read** [python, argparse]: Mark GoodLinks links read when tagged with a read-invariant tag (e.g. reference). Dry-run by default; `--apply` writes.
+- **goodlinks-mark-unrecoverable** [python, argparse]: Tag entries from unrecoverable.tsv with a removal tag for a later delete pass. Dry-run by default; `--apply` writes.
 - **goodlinks-migrate-link** [python, argparse]: Recreate a dead GoodLinks link at a new URL, carrying metadata over and cross-linking old/new entries. Dry-run by default; `--apply` writes. Never deletes the old entry.
 - **goodlinks-open** [bash]: Open a link in GoodLinks.app by URL or ID.
+- **goodlinks-recover-dead** [python, argparse]: Look up Wayback Machine snapshots for dead or redirected-to-root links; input is grouped (classify-dupes) or flat (check-links --json). Read-only.
+- **goodlinks-recovery-report** [python, argparse]: Split recover-dead output into recoverable/unrecoverable TSVs for apply-recovery and mark-unrecoverable.
 - **goodlinks-remove-unreadable-scheme** [python, argparse]: Remove GoodLinks links whose URL scheme GoodLinks can't render (mailto:, tel:, sms:, etc. — junk saves that hand off to another app). Dry-run by default; `--apply` deletes.
+- **goodlinks-tag-by-author** [bash]: Given a regex pattern to search authors and a tag, apply the tag to matching articles.
 - **goodlinks-tag-by-title** [bash]: Given a regex pattern to search titles and
   a tag, apply the tag to matching articles.
-- **goodlinks-to-epub** [bash, -h]: Generate an epub from goodlinksctl JSON
+- **goodlinks-to-epub** [bash, -h]: Generate an epub from goodlinks-links-json output
   read on stdin. Fetches full article content for each item and compiles them with pandoc.
+- **goodlinks-untag-by-author** [bash]: Given a regex pattern to search authors and a tag, remove the tag from matching articles.
+- **goodlinks-apply-recovery** [python, argparse]: Recreate dead links at their Wayback snapshots by driving goodlinks-migrate-link per recoverable.tsv row. Dry-run by default; `--apply` writes.
 
 ## Reading / Reader / personal info (`reader-tools`, `reader-views`, `ssa-total-earnings`, `ofxdate`, `canonical-url`, `favicon-url`)
 
